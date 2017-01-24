@@ -6,8 +6,8 @@ Build-Depends: debhelper (>= 10), zlib1g-dev, libssl-dev, libsasl2-dev, liblz4-d
 Standards-Version: 3.9.8
 Section: libs
 Homepage: https://github.com/edenhill/librdkafka
-Vcs-Git: https://github.com/edenhill/librdkafka.git -b debian
-Vcs-Browser: https://github.com/edenhill/librdkafka/tree/debian
+Vcs-Git: https://anonscm.debian.org/cgit/pkg-kafka/librdkafka.git -b debian
+Vcs-Browser: https://anonscm.debian.org/cgit/pkg-kafka/librdkafka.git
 
 Package: librdkafka1
 Architecture: any
