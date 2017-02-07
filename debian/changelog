@@ -1,3 +1,9 @@
+librdkafka (0.9.3-1~bpo8+1) jessie-backports; urgency=medium
+
+  * Rebuild for jessie-backports.
+
+ -- Christos Trochalakis <ctrochalakis@debian.org>  Tue, 07 Feb 2017 10:31:04 +0200
+
 librdkafka (0.9.3-1) unstable; urgency=medium
 
   * New upstream release.
