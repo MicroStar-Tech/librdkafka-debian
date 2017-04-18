@@ -1,3 +1,12 @@
+librdkafka (0.9.5-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Add a README.source note about shipping lz4 in the upstream tarball.
+    lz4 is not used in Debian builds.
+  * Add copyright for the lz4 library.
+
+ -- Christos Trochalakis <ctrochalakis@debian.org>  Tue, 18 Apr 2017 12:30:07 +0300
+
 librdkafka (0.9.4-1) experimental; urgency=medium
 
   [ Faidon Liambotis ]
