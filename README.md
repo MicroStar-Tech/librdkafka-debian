@@ -24,27 +24,30 @@ See the [wiki](https://github.com/edenhill/librdkafka/wiki) for a FAQ.
 **NOTE**: The `master` branch is actively developed, use latest release for production use.
 
 
-#Overview#
+# Overview #
   * High-level producer
   * High-level balanced KafkaConsumer (requires broker >= 0.9)
   * Simple (legacy) consumer
   * Compression: snappy, gzip, lz4
   * [SSL](https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka) support
-  * [SASL](https://github.com/edenhill/librdkafka/wiki/Using-SASL-with-librdkafka) (GSSAPI/Kerberos, PLAIN) support
+  * [SASL](https://github.com/edenhill/librdkafka/wiki/Using-SASL-with-librdkafka) (GSSAPI/Kerberos/SSPI, PLAIN, SCRAM) support
   * Broker version support: >=0.8 (see [Broker version compatibility](https://github.com/edenhill/librdkafka/wiki/Broker-version-compatibility))
   * Stable C & C++ APIs (ABI safety guaranteed for C)
   * [Statistics](https://github.com/edenhill/librdkafka/wiki/Statistics) metrics
   * Debian package: librdkafka1 and librdkafka-dev in Debian and Ubuntu
   * RPM package: librdkafka and librdkafka-devel
+  * Gentoo package: dev-libs/librdkafka
   * Portable: runs on Linux, OSX, Win32, Solaris, FreeBSD, ...
 
 
-#Language bindings#
+# Language bindings #
 
   * C#/.NET: [confluent-kafka-dotnet](https://github.com/confluentinc/confluent-kafka-dotnet) (based on [rdkafka-dotnet](https://github.com/ah-/rdkafka-dotnet))
+  * C++: [cppkafka](https://github.com/mfontanini/cppkafka)
   * D (C-like): [librdkafka](https://github.com/DlangApache/librdkafka/)
   * D (C++-like): [librdkafkad](https://github.com/tamediadigital/librdkafka-d)
   * Go: [confluent-kafka-go](https://github.com/confluentinc/confluent-kafka-go)
+  * Haskell (kafka, conduit, avro, schema registry): [hw-kafka](https://github.com/haskell-works/hw-kafka)
   * Haskell: [haskakafka](https://github.com/cosbynator/haskakafka)
   * Haskell: [haskell-kafka](https://github.com/yanatan16/haskell-kafka)
   * Lua: [luardkafka](https://github.com/mistsv/luardkafka)
@@ -59,8 +62,9 @@ See the [wiki](https://github.com/edenhill/librdkafka/wiki) for a FAQ.
   * Ruby: [Hermann](https://github.com/reiseburo/hermann)
   * Rust: [rust-rdkafka](https://github.com/fede1024/rust-rdkafka)
   * Tcl: [KafkaTcl](https://github.com/flightaware/kafkatcl)
+  * Swift: [Perfect-Kafka](https://github.com/PerfectlySoft/Perfect-Kafka)
 
-#Users of librdkafka#
+# Users of librdkafka #
 
   * [kafkacat](https://github.com/edenhill/kafkacat) - Apache Kafka swiss army knife
   * [Wikimedia's varnishkafka](https://github.com/wikimedia/varnishkafka) - Varnish cache web log producer
@@ -77,6 +81,7 @@ See the [wiki](https://github.com/edenhill/librdkafka/wiki) for a FAQ.
   * [OVH](http://ovh.com) - [AntiDDOS](http://www.slideshare.net/hugfrance/hugfr-6-oct2014ovhantiddos)
   * [otto.de](http://otto.de)'s [trackdrd](https://github.com/otto-de/trackrdrd) - Varnish log reader
   * [Microwish](https://github.com/microwish) has a range of Kafka utilites for log aggregation, HDFS integration, etc.
+  * [aidp](https://github.com/weiboad/aidp) - kafka consumer embedded Lua scripting language in data process framework 
   * large unnamed financial institution
   * *Let [me](mailto:rdkafka@edenhill.se) know if you are using librdkafka*
 
@@ -89,9 +94,8 @@ See the [wiki](https://github.com/edenhill/librdkafka/wiki) for a FAQ.
 	GNU make
    	pthreads
 	zlib (optional, for gzip compression support)
-	libssl-dev (optional, for SSL support)
-	libsasl2-dev (optional, for SASL support)
-	liblz4-dev (optional, for LZ4 compression support)
+	libssl-dev (optional, for SSL and SASL SCRAM support)
+	libsasl2-dev (optional, for SASL GSSAPI support)
 
 ## Instructions
 

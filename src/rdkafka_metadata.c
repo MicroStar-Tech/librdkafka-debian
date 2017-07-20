@@ -234,7 +234,7 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
         /* We assume that the marshalled representation is
          * no more than 4 times larger than the wire representation. */
         rd_tmpabuf_new(&tbuf,
-                       sizeof(*md) + rkb_namelen + (rkbuf->rkbuf_len * 4),
+                       sizeof(*md) + rkb_namelen + (rkbuf->rkbuf_totlen * 4),
                        0/*dont assert on fail*/);
 
         if (!(md = rd_tmpabuf_alloc(&tbuf, sizeof(*md))))
@@ -508,6 +508,20 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
         rd_kafka_wrlock(rkb->rkb_rk);
         rkb->rkb_rk->rk_ts_metadata = rd_clock();
 
+        /* Update cached cluster id. */
+        if (RD_KAFKAP_STR_LEN(&cluster_id) > 0 &&
+            (!rkb->rkb_rk->rk_clusterid ||
+             rd_kafkap_str_cmp_str(&cluster_id, rkb->rkb_rk->rk_clusterid))) {
+                rd_rkb_dbg(rkb, BROKER|RD_KAFKA_DBG_GENERIC, "CLUSTERID",
+                           "ClusterId update \"%s\" -> \"%.*s\"",
+                           rkb->rkb_rk->rk_clusterid ?
+                           rkb->rkb_rk->rk_clusterid : "",
+                           RD_KAFKAP_STR_PR(&cluster_id));
+                if (rkb->rkb_rk->rk_clusterid)
+                        rd_free(rkb->rkb_rk->rk_clusterid);
+                rkb->rkb_rk->rk_clusterid = RD_KAFKAP_STR_DUP(&cluster_id);
+        }
+
         if (all_topics) {
                 rd_kafka_metadata_cache_update(rkb->rkb_rk,
                                                md, 1/*abs update*/);
@@ -551,6 +565,7 @@ done:
          * to the caller. */
         return md;
 
+ err_parse:
 err:
         if (requested_topics) {
                 /* Failed requests shall purge cache hints for
@@ -944,6 +959,7 @@ static void rd_kafka_metadata_leader_query_tmr_cb (rd_kafka_timers_t *rkts,
                 rd_kafka_topic_rdunlock(rkt);
         }
 
+        rd_kafka_wrunlock(rk);
 
         if (rd_list_cnt(&topics) == 0) {
                 /* No leader-less topics+partitions, stop the timer. */
@@ -962,8 +978,6 @@ static void rd_kafka_metadata_leader_query_tmr_cb (rd_kafka_timers_t *rkts,
                         rd_kafka_timer_backoff(rkts, rtmr,
                                                (int)rtmr->rtmr_interval);
         }
-
-        rd_kafka_wrunlock(rk);
 
         rd_list_destroy(&topics);
 }
