@@ -74,17 +74,6 @@ extern mtx_t test_mtx;
 #define TEST_UNLOCK() mtx_unlock(&test_mtx)
 
 
-static RD_INLINE RD_UNUSED
-int tmout_multip (int msecs) {
-        int r;
-        TEST_LOCK();
-        r = (int)(((double)(msecs)) * test_timeout_multiplier);
-        TEST_UNLOCK();
-        return r;
-}
-
-
-
 #define _C_CLR "\033[0m"
 #define _C_RED "\033[31m"
 #define _C_GRN "\033[32m"
@@ -111,6 +100,8 @@ struct test {
 #define TEST_F_LOCAL   0x1   /**< Test is local, no broker requirement */
 #define TEST_F_KNOWN_ISSUE 0x2 /**< Known issue, can fail without affecting
 				*   total test run status. */
+#define TEST_F_MANUAL      0x4 /**< Manual test, only started when specifically
+                                *   stated */
 	int minver;          /**< Limit tests to broker version range. */
 	int maxver;
 

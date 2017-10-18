@@ -60,6 +60,11 @@ set(
     0064-interceptors.c
     0065-yield.cpp
     0066-plugins.cpp
+    0067-empty_topic.cpp
+    0068-produce_timeout.c
+    0069-consumer_add_parts.c
+    0070-null_empty.cpp
+    8000-idle.cpp
     test.c
     testcpp.cpp
     sockem.c

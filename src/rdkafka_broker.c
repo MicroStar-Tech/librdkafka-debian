@@ -1050,7 +1050,7 @@ int rd_kafka_recv (rd_kafka_broker_t *rkb) {
         /* errstr is not set by buf_read errors, so default it here. */
         char errstr[512] = "Protocol parse failure";
         rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR_NO_ERROR;
-	const int log_decode_errors = 1;
+	const int log_decode_errors = LOG_ERR;
 
 
         /* It is impossible to estimate the correct size of the response
@@ -1280,7 +1280,7 @@ rd_kafka_broker_handle_SaslHandshake (rd_kafka_t *rk,
 				      rd_kafka_buf_t *rkbuf,
 				      rd_kafka_buf_t *request,
 				      void *opaque) {
-        const int log_decode_errors = 1;
+        const int log_decode_errors = LOG_ERR;
 	int32_t MechCnt;
 	int16_t ErrorCode;
 	int i = 0;
@@ -2150,6 +2150,16 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
                 /* nop: just a wake-up. */
                 if (rkb->rkb_blocking_max_ms > 1)
                         rkb->rkb_blocking_max_ms = 1; /* Speed up termination*/
+                rd_rkb_dbg(rkb, BROKER, "TERM",
+                           "Received TERMINATE op in state %s: "
+                           "%d refcnts, %d toppar(s), %d fetch toppar(s), "
+                           "%d outbufs, %d waitresps, %d retrybufs",
+                           rd_kafka_broker_state_names[rkb->rkb_state],
+                           rd_refcnt_get(&rkb->rkb_refcnt),
+                           rkb->rkb_toppar_cnt, rkb->rkb_fetch_toppar_cnt,
+                           (int)rd_kafka_bufq_cnt(&rkb->rkb_outbufs),
+                           (int)rd_kafka_bufq_cnt(&rkb->rkb_waitresps),
+                           (int)rd_kafka_bufq_cnt(&rkb->rkb_retrybufs));
                 ret = 0;
                 break;
 
@@ -2467,7 +2477,7 @@ rd_kafka_fetch_reply_handle (rd_kafka_broker_t *rkb,
 			     rd_kafka_buf_t *rkbuf, rd_kafka_buf_t *request) {
 	int32_t TopicArrayCnt;
 	int i;
-        const int log_decode_errors = 1;
+        const int log_decode_errors = LOG_ERR;
         shptr_rd_kafka_itopic_t *s_rkt = NULL;
 
 	if (rd_kafka_buf_ApiVersion(request) >= 1) {
