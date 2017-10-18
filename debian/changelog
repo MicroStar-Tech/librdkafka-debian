@@ -1,3 +1,10 @@
+librdkafka (0.11.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump Standards-Version, no changes needed
+
+ -- Christos Trochalakis <ctrochalakis@debian.org>  Wed, 18 Oct 2017 12:44:25 +0300
+
 librdkafka (0.11.0-1) unstable; urgency=medium
 
   * New upstream release
