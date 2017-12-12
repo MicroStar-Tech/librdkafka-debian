@@ -1,3 +1,17 @@
+librdkafka (0.11.3-1) unstable; urgency=medium
+
+  librdkafka 0.11.3 introduced the following default configuration changes:
+
+  o queue.buffering.max.kbytes 
+    The default value of queue.buffering.max.kbytes was changed 
+    from 4000000kB to 1048576kB (1GB).
+
+  o queued.max.messages.kbytes 
+    The default value of queued.max.messages.kbytes was changed 
+    from 1000000kB to 1048576kB (1GB).
+
+ -- Mpampis Kostas <charkost.rb@gmail.com>  Tue, 12 Dec 2017 16:29:38 +0200
+
 librdkafka (0.11.0-1) unstable; urgency=medium
 
   librdkafka 0.11.0 introduced a number of default configuration changes
