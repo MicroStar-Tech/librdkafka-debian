@@ -1,3 +1,10 @@
+librdkafka (0.11.3-1~bpo9+1) stretch-backports; urgency=medium
+
+  * Team upload
+  * Rebuild for stretch-backports
+
+ -- Mpampis Kostas <charkost.rb@gmail.com>  Fri, 05 Jan 2018 11:06:20 +0200
+
 librdkafka (0.11.3-1) unstable; urgency=medium
 
   * Team upload
