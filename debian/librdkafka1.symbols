@@ -48,6 +48,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_consume_stop@Base 0.8.0
  rd_kafka_consumer_close@Base 0.9.0
  rd_kafka_consumer_poll@Base 0.9.0
+ rd_kafka_default_topic_conf_dup@Base 0.11.4
  rd_kafka_destroy@Base 0.8.0
  rd_kafka_dump@Base 0.8.0
  rd_kafka_err2name@Base 0.9.1
@@ -72,10 +73,20 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_get_err_descs@Base 0.9.1
  rd_kafka_get_watermark_offsets@Base 0.9.1
  rd_kafka_group_list_destroy@Base 0.9.1
+ rd_kafka_header_add@Base 0.11.4
+ rd_kafka_header_cnt@Base 0.11.4
+ rd_kafka_header_get@Base 0.11.4
+ rd_kafka_header_get_all@Base 0.11.4
+ rd_kafka_header_get_last@Base 0.11.4
+ rd_kafka_header_remove@Base 0.11.4
+ rd_kafka_headers_copy@Base 0.11.4
+ rd_kafka_headers_destroy@Base 0.11.4
+ rd_kafka_headers_new@Base 0.11.4
  rd_kafka_interceptor_add_on_acknowledgement@Base 0.11.0
  rd_kafka_interceptor_add_on_commit@Base 0.11.0
  rd_kafka_interceptor_add_on_consume@Base 0.11.0
  rd_kafka_interceptor_add_on_destroy@Base 0.11.0
+ rd_kafka_interceptor_add_on_request_sent@Base 0.11.4
  rd_kafka_interceptor_add_on_send@Base 0.11.0
  rd_kafka_last_error@Base 0.9.1
  rd_kafka_list_groups@Base 0.9.1
@@ -84,12 +95,17 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_mem_free@Base 0.9.1
  rd_kafka_memberid@Base 0.9.0
  rd_kafka_message_destroy@Base 0.8.0
+ rd_kafka_message_detach_headers@Base 0.11.4
+ rd_kafka_message_headers@Base 0.11.4
  rd_kafka_message_latency@Base 0.11.0
+ rd_kafka_message_set_headers@Base 0.11.4
  rd_kafka_message_timestamp@Base 0.9.1
  rd_kafka_metadata@Base 0.8.4
  rd_kafka_metadata_destroy@Base 0.8.4
  rd_kafka_msg_partitioner_consistent@Base 0.9.0
  rd_kafka_msg_partitioner_consistent_random@Base 0.9.1
+ rd_kafka_msg_partitioner_murmur2@Base 0.11.4
+ rd_kafka_msg_partitioner_murmur2_random@Base 0.11.4
  rd_kafka_msg_partitioner_random@Base 0.8.0
  rd_kafka_name@Base 0.8.0
  rd_kafka_new@Base 0.8.0
@@ -130,6 +146,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_topic_conf_get@Base 0.9.0
  rd_kafka_topic_conf_new@Base 0.8.0
  rd_kafka_topic_conf_set@Base 0.8.0
+ rd_kafka_topic_conf_set_msg_order_cmp@Base 0.11.4
  rd_kafka_topic_conf_set_opaque@Base 0.8.0
  rd_kafka_topic_conf_set_partitioner_cb@Base 0.8.0
  rd_kafka_topic_destroy@Base 0.8.0
