@@ -25,7 +25,8 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#pragma once
+#ifndef _RDENDIAN_H_
+#define _RDENDIAN_H_
 
 /**
  * Provides portable endian-swapping macros/functions.
@@ -51,11 +52,13 @@
    #define be32toh(x) (x)
    #define be64toh(x) (x)
    #define le64toh(x) __bswap_64 (x)
+   #define le32toh(x) __bswap_32 (x)
   #else
    #define be16toh(x) __bswap_16 (x)
    #define be32toh(x) __bswap_32 (x)
    #define be64toh(x) __bswap_64 (x)
    #define le64toh(x) (x)
+   #define le32toh(x) (x)
   #endif
  #endif
 
@@ -76,9 +79,6 @@
 #define le16toh(x) ((uint16_t)BSWAP_16(x))
 #define le32toh(x) BSWAP_32(x)
 #define le64toh(x) BSWAP_64(x)
-#define htole16(x) ((uint16_t)BSWAP_16(x))
-#define htole32(x) BSWAP_32(x)
-#define htole64(x) BSWAP_64(x)
 # else
 #define __BYTE_ORDER __LITTLE_ENDIAN
 #define be64toh(x) BSWAP_64(x)
@@ -88,7 +88,6 @@
 #define le32toh(x) (x)
 #define le64toh(x) (x)
 #define htole16(x) (x)
-#define htole32(x) (x)
 #define htole64(x) (x)
 #endif /* sun */
 
@@ -125,6 +124,11 @@
 #define be64toh(x) (x)
 #define be32toh(x) (x)
 #define be16toh(x) (x)
+#define le32toh(x)                              \
+        ((((x) & 0xff) << 24) |                 \
+         (((x) & 0xff00) << 8) |                \
+         (((x) & 0xff0000) >> 8) |              \
+         (((x) & 0xff000000) >> 24))
 
 #else
  #include <endian.h>
@@ -157,3 +161,9 @@
 #ifndef htobe16
 #define htobe16(x) be16toh(x)
 #endif
+
+#ifndef htole32
+#define htole32(x) le32toh(x)
+#endif
+
+#endif /* _RDENDIAN_H_ */
