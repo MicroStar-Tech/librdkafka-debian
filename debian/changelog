@@ -1,3 +1,15 @@
+librdkafka (0.11.4-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * Bump Standards-Version, no changes needed
+  * Update librdkafka1.symbols for 0.11.4
+  * d/copyright:
+    + Switch the copyright-format URL to https
+    + Move license paragraph to the end
+
+ -- Mpampis Kostas <charkost.rb@gmail.com>  Tue, 10 Apr 2018 13:19:03 +0300
+
 librdkafka (0.11.3-1) unstable; urgency=medium
 
   * Team upload
