@@ -1,5 +1,53 @@
 librdkafka.so.1 librdkafka1 #MINVER#
 * Build-Depends-Package: librdkafka-dev
+ rd_kafka_AdminOptions_destroy@Base 0.11.5
+ rd_kafka_AdminOptions_new@Base 0.11.5
+ rd_kafka_AdminOptions_set_broker@Base 0.11.5
+ rd_kafka_AdminOptions_set_opaque@Base 0.11.5
+ rd_kafka_AdminOptions_set_operation_timeout@Base 0.11.5
+ rd_kafka_AdminOptions_set_request_timeout@Base 0.11.5
+ rd_kafka_AdminOptions_set_validate_only@Base 0.11.5
+ rd_kafka_AlterConfigs@Base 0.11.5
+ rd_kafka_AlterConfigs_result_resources@Base 0.11.5
+ rd_kafka_ConfigEntry_is_default@Base 0.11.5
+ rd_kafka_ConfigEntry_is_read_only@Base 0.11.5
+ rd_kafka_ConfigEntry_is_sensitive@Base 0.11.5
+ rd_kafka_ConfigEntry_is_synonym@Base 0.11.5
+ rd_kafka_ConfigEntry_name@Base 0.11.5
+ rd_kafka_ConfigEntry_source@Base 0.11.5
+ rd_kafka_ConfigEntry_synonyms@Base 0.11.5
+ rd_kafka_ConfigEntry_value@Base 0.11.5
+ rd_kafka_ConfigResource_configs@Base 0.11.5
+ rd_kafka_ConfigResource_destroy@Base 0.11.5
+ rd_kafka_ConfigResource_destroy_array@Base 0.11.5
+ rd_kafka_ConfigResource_error@Base 0.11.5
+ rd_kafka_ConfigResource_error_string@Base 0.11.5
+ rd_kafka_ConfigResource_name@Base 0.11.5
+ rd_kafka_ConfigResource_new@Base 0.11.5
+ rd_kafka_ConfigResource_set_config@Base 0.11.5
+ rd_kafka_ConfigResource_type@Base 0.11.5
+ rd_kafka_ConfigSource_name@Base 0.11.5
+ rd_kafka_CreatePartitions@Base 0.11.5
+ rd_kafka_CreatePartitions_result_topics@Base 0.11.5
+ rd_kafka_CreateTopics@Base 0.11.5
+ rd_kafka_CreateTopics_result_topics@Base 0.11.5
+ rd_kafka_DeleteTopic_destroy@Base 0.11.5
+ rd_kafka_DeleteTopic_destroy_array@Base 0.11.5
+ rd_kafka_DeleteTopic_new@Base 0.11.5
+ rd_kafka_DeleteTopics@Base 0.11.5
+ rd_kafka_DeleteTopics_result_topics@Base 0.11.5
+ rd_kafka_DescribeConfigs@Base 0.11.5
+ rd_kafka_DescribeConfigs_result_resources@Base 0.11.5
+ rd_kafka_NewPartitions_destroy@Base 0.11.5
+ rd_kafka_NewPartitions_destroy_array@Base 0.11.5
+ rd_kafka_NewPartitions_new@Base 0.11.5
+ rd_kafka_NewPartitions_set_replica_assignment@Base 0.11.5
+ rd_kafka_NewTopic_destroy@Base 0.11.5
+ rd_kafka_NewTopic_destroy_array@Base 0.11.5
+ rd_kafka_NewTopic_new@Base 0.11.5
+ rd_kafka_NewTopic_set_config@Base 0.11.5
+ rd_kafka_NewTopic_set_replica_assignment@Base 0.11.5
+ rd_kafka_ResourceType_name@Base 0.11.5
  rd_kafka_assign@Base 0.9.0
  rd_kafka_assignment@Base 0.9.0
  rd_kafka_brokers_add@Base 0.8.0
@@ -21,6 +69,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_conf_new@Base 0.8.0
  rd_kafka_conf_properties_show@Base 0.8.0
  rd_kafka_conf_set@Base 0.8.0
+ rd_kafka_conf_set_background_event_cb@Base 0.11.5
  rd_kafka_conf_set_closesocket_cb@Base 0.9.3
  rd_kafka_conf_set_connect_cb@Base 0.9.3
  rd_kafka_conf_set_consume_cb@Base 0.9.0
@@ -48,6 +97,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_consume_stop@Base 0.8.0
  rd_kafka_consumer_close@Base 0.9.0
  rd_kafka_consumer_poll@Base 0.9.0
+ rd_kafka_controllerid@Base 0.11.5
  rd_kafka_default_topic_conf_dup@Base 0.11.4
  rd_kafka_destroy@Base 0.8.0
  rd_kafka_dump@Base 0.8.0
@@ -55,6 +105,11 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_err2str@Base 0.8.0
  rd_kafka_errno2err@Base 0.8.3
  rd_kafka_errno@Base 0.9.1
+ rd_kafka_event_AlterConfigs_result@Base 0.11.5
+ rd_kafka_event_CreatePartitions_result@Base 0.11.5
+ rd_kafka_event_CreateTopics_result@Base 0.11.5
+ rd_kafka_event_DeleteTopics_result@Base 0.11.5
+ rd_kafka_event_DescribeConfigs_result@Base 0.11.5
  rd_kafka_event_destroy@Base 0.9.2
  rd_kafka_event_error@Base 0.9.2
  rd_kafka_event_error_string@Base 0.9.2
@@ -122,8 +177,10 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_produce_batch@Base 0.8.4
  rd_kafka_producev@Base 0.9.4
  rd_kafka_query_watermark_offsets@Base 0.9.1
+ rd_kafka_queue_cb_event_enable@Base 0.11.5
  rd_kafka_queue_destroy@Base 0.8.4
  rd_kafka_queue_forward@Base 0.9.2
+ rd_kafka_queue_get_background@Base 0.11.5
  rd_kafka_queue_get_consumer@Base 0.9.2
  rd_kafka_queue_get_main@Base 0.9.2
  rd_kafka_queue_get_partition@Base 0.9.4
@@ -165,6 +222,9 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_topic_partition_list_new@Base 0.9.0
  rd_kafka_topic_partition_list_set_offset@Base 0.9.1
  rd_kafka_topic_partition_list_sort@Base 0.9.4
+ rd_kafka_topic_result_error@Base 0.11.5
+ rd_kafka_topic_result_error_string@Base 0.11.5
+ rd_kafka_topic_result_name@Base 0.11.5
  rd_kafka_type@Base 0.11.0
  rd_kafka_unittest@Base 0.11.0
  rd_kafka_unsubscribe@Base 0.9.0
