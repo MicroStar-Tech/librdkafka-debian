@@ -23,7 +23,7 @@ Description: library implementing the Apache Kafka protocol
  containing both Producer and Consumer support. It was designed with message
  delivery reliability and high performance in mind, current figures exceed
  800000 msgs/second for the producer and 3 million msgs/second for the
- consumer. It implements both the 0.8 and 0.9 versions of the protocol.
+ consumer.
  .
  More information about Apache Kafka can be found at http://kafka.apache.org/
  .
@@ -38,7 +38,7 @@ Description: library implementing the Apache Kafka protocol (C++ bindings)
  containing both Producer and Consumer support. It was designed with message
  delivery reliability and high performance in mind, current figures exceed
  800000 msgs/second for the producer and 3 million msgs/second for the
- consumer. It implements both the 0.8 and 0.9 versions of the protocol.
+ consumer.
  .
  More information about Apache Kafka can be found at http://kafka.apache.org/
  .
@@ -56,7 +56,7 @@ Description: library implementing the Apache Kafka protocol (development headers
  containing both Producer and Consumer support. It was designed with message
  delivery reliability and high performance in mind, current figures exceed
  800000 msgs/second for the producer and 3 million msgs/second for the
- consumer. It implements both the 0.8 and 0.9 versions of the protocol.
+ consumer.
  .
  More information about Apache Kafka can be found at http://kafka.apache.org/
  .
