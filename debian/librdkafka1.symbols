@@ -100,6 +100,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_controllerid@Base 0.11.5
  rd_kafka_default_topic_conf_dup@Base 0.11.4
  rd_kafka_destroy@Base 0.8.0
+ rd_kafka_destroy_flags@Base 0.11.6
  rd_kafka_dump@Base 0.8.0
  rd_kafka_err2name@Base 0.9.1
  rd_kafka_err2str@Base 0.8.0
