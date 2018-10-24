@@ -1,3 +1,12 @@
+librdkafka (0.11.6-1) unstable; urgency=medium
+
+  * New upstream version
+  * Update librdkafka1.symbols for 0.11.6
+  * Bump Standards-Version, no changes needed
+  * Drop references to the supported protocol versions
+
+ -- Christos Trochalakis <ctrochalakis@debian.org>  Wed, 24 Oct 2018 12:01:10 +0300
+
 librdkafka (0.11.5-1) unstable; urgency=medium
 
   * New upstream release
