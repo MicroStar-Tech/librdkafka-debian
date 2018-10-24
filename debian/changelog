@@ -1,3 +1,9 @@
+librdkafka (0.11.6-1~bpo9+1) stretch-backports; urgency=medium
+
+  * Rebuild for stretch-backports.
+
+ -- Christos Trochalakis <ctrochalakis@debian.org>  Wed, 24 Oct 2018 15:08:05 +0300
+
 librdkafka (0.11.6-1) unstable; urgency=medium
 
   * New upstream version
