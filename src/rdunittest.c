@@ -41,8 +41,15 @@
 #include "rdhdrhistogram.h"
 #endif
 #include "rdkafka_int.h"
+#include "rdkafka_broker.h"
+#include "rdkafka_request.h"
 
 #include "rdsysqueue.h"
+#include "rdkafka_sasl_oauthbearer.h"
+#include "rdkafka_msgset.h"
+
+
+int rd_unittest_assert_on_failure = 0;
 
 
 /**
@@ -126,8 +133,7 @@ static int ut_tq_test (const struct ut_tq_args *args) {
                 if (!insert_after) {
                         /* Insert position is head of list,
                          * do two-step concat+move */
-                        TAILQ_CONCAT(tqh[qi], tqh[0], link); /* append */
-                        TAILQ_MOVE(tqh[0], tqh[qi], link); /* replace */
+                        TAILQ_PREPEND(tqh[0], tqh[qi], ut_tq_head, link);
                 } else {
                         TAILQ_INSERT_LIST(tqh[0], insert_after, tqh[qi],
                                           ut_tq_head,
@@ -399,9 +405,21 @@ int rd_unittest (void) {
 #ifdef _MSC_VER
                 { "rdclock", unittest_rdclock },
 #endif
+                { "conf", unittest_conf },
+                { "broker", unittest_broker },
+                { "request", unittest_request },
+#if WITH_SASL_OAUTHBEARER
+                { "sasl_oauthbearer", unittest_sasl_oauthbearer },
+#endif
+                { "aborted_txns", unittest_aborted_txns },
                 { NULL }
         };
         int i;
+
+#ifndef _MSC_VER
+        if (getenv("RD_UT_ASSERT"))
+                rd_unittest_assert_on_failure = 1;
+#endif
 
         for (i = 0 ; unittests[i].name ; i++) {
                 int f = unittests[i].call();

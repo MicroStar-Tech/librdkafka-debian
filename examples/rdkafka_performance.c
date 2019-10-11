@@ -3,24 +3,24 @@
  *
  * Copyright (c) 2012, Magnus Edenhill
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met: 
- * 
+ * modification, are permitted provided that the following conditions are met:
+ *
  * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer. 
+ *    this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright notice,
  *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution. 
- * 
+ *    and/or other materials provided with the distribution.
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
@@ -68,7 +68,6 @@ static FILE *stats_fp;
 static int dr_disp_div;
 static int verbosity = 1;
 static int latency_mode = 0;
-static int report_offset = 0;
 static FILE *latency_fp = NULL;
 static int msgcnt = -1;
 static int incremental_mode = 0;
@@ -131,8 +130,15 @@ uint64_t wall_clock (void) {
 }
 
 static void err_cb (rd_kafka_t *rk, int err, const char *reason, void *opaque) {
-	printf("%% ERROR CALLBACK: %s: %s: %s\n",
-	       rd_kafka_name(rk), rd_kafka_err2str(err), reason);
+        if (err == RD_KAFKA_RESP_ERR__FATAL) {
+                char errstr[512];
+                err = rd_kafka_fatal_error(rk, errstr, sizeof(errstr));
+                printf("%% FATAL ERROR CALLBACK: %s: %s: %s\n",
+                       rd_kafka_name(rk), rd_kafka_err2str(err), errstr);
+        } else {
+                printf("%% ERROR CALLBACK: %s: %s: %s\n",
+                       rd_kafka_name(rk), rd_kafka_err2str(err), reason);
+        }
 }
 
 static void throttle_cb (rd_kafka_t *rk, const char *broker_name,
@@ -182,7 +188,7 @@ static void msg_delivered (rd_kafka_t *rk,
 	rd_ts_t now = rd_clock();
 	static int msgs;
 
-	msgs++;
+        msgs++;
 
 	msgs_wait_cnt--;
 
@@ -206,7 +212,7 @@ static void msg_delivered (rd_kafka_t *rk,
 	     (cnt.msgs_dr_err < 50 ||
               !(cnt.msgs_dr_err % (dispintvl / 1000)))) ||
 	    !last || msgs_wait_cnt < 5 ||
-	    !(msgs_wait_cnt % dr_disp_div) || 
+	    !(msgs_wait_cnt % dr_disp_div) ||
 	    (now - last) >= dispintvl * 1000 ||
             verbosity >= 3) {
 		if (rkmessage->err && verbosity >= 2)
@@ -227,12 +233,16 @@ static void msg_delivered (rd_kafka_t *rk,
 		last = now;
 	}
 
-        if (report_offset)
-                cnt.last_offset = rkmessage->offset;
+        cnt.last_offset = rkmessage->offset;
 
 	if (msgs_wait_produce_cnt == 0 && msgs_wait_cnt == 0 && !forever) {
-		if (verbosity >= 2)
-			printf("All messages delivered!\n");
+                if (verbosity >= 2 && cnt.msgs > 0) {
+                        double error_percent =
+                                (double)(cnt.msgs - cnt.msgs_dr_ok) /
+                                cnt.msgs * 100;
+                        printf("%% Messages delivered with failure "
+                               "percentage of %.5f%%\n", error_percent);
+                }
 		t_end = rd_clock();
 		run = 0;
 	}
@@ -502,8 +512,7 @@ static void print_stats (rd_kafka_t *rk,
                                 COL_HDR("dr_err");
                                 COL_HDR("tx_err");
                                 COL_HDR("outq");
-                                if (report_offset)
-                                        COL_HDR("offset");
+                                COL_HDR("offset");
                                 if (latency_mode) {
                                         COL_HDR("lat_curr");
                                         COL_HDR("lat_avg");
@@ -528,8 +537,7 @@ static void print_stats (rd_kafka_t *rk,
                         COL_PR64("tx_err", cnt.tx_err);
                         COL_PR64("outq",
                                  rk ? (uint64_t)rd_kafka_outq_len(rk) : 0);
-                        if (report_offset)
-                                COL_PR64("offset", (uint64_t)cnt.last_offset);
+                        COL_PR64("offset", (uint64_t)cnt.last_offset);
                         if (latency_mode) {
                                 COL_PRF("lat_curr", cnt.latency_last / 1000.0f);
                                 COL_PRF("lat_avg", latency_avg / 1000.0f);
@@ -790,6 +798,7 @@ int main (int argc, char **argv) {
 	char *msgpattern = "librdkafka_performance testing!";
 	int msgsize = -1;
 	const char *debug = NULL;
+	int do_conf_dump = 0;
 	rd_ts_t now;
 	char errstr[512];
 	uint64_t seq = 0;
@@ -995,6 +1004,11 @@ int main (int argc, char **argv) {
 				exit(0);
 			}
 
+			if (!strcmp(optarg, "dump")) {
+				do_conf_dump = 1;
+				continue;
+			}
+
 			name = optarg;
 			if (!(val = strchr(name, '='))) {
 				fprintf(stderr, "%% Expected "
@@ -1083,18 +1097,6 @@ int main (int argc, char **argv) {
 			}
                         break;
 
-                case 'O':
-                        if (rd_kafka_topic_conf_set(topic_conf,
-                                                    "produce.offset.report",
-                                                    "true",
-                                                    errstr, sizeof(errstr)) !=
-                            RD_KAFKA_CONF_OK) {
-                                fprintf(stderr, "%% %s\n", errstr);
-                                exit(1);
-                        }
-                        report_offset = 1;
-                        break;
-
 		case 'M':
 			incremental_mode = 1;
 			break;
@@ -1152,9 +1154,9 @@ int main (int argc, char **argv) {
 			"configuration property\n"
 			"               Properties prefixed with \"topic.\" "
 			"will be set on topic object.\n"
-			"               Use '-X list' to see the full list\n"
-			"               of supported properties.\n"
                         "  -X file=<path> Read config from file.\n"
+                        "  -X list      Show full list of supported properties.\n"
+                        "  -X dump      Show configuration\n"
 			"  -T <intvl>   Enable statistics from librdkafka at "
 			"specified interval (ms)\n"
                         "  -Y <command> Pipe statistics to <command>\n"
@@ -1226,6 +1228,35 @@ int main (int argc, char **argv) {
                 exit(1);
         }
 
+        if (do_conf_dump) {
+                const char **arr;
+                size_t cnt;
+                int pass;
+
+                for (pass = 0 ; pass < 2 ; pass++) {
+                        int i;
+
+                        if (pass == 0) {
+                                arr = rd_kafka_conf_dump(conf, &cnt);
+                                printf("# Global config\n");
+                        } else {
+                                printf("# Topic config\n");
+                                arr = rd_kafka_topic_conf_dump(topic_conf,
+                                                               &cnt);
+                        }
+
+                        for (i = 0 ; i < (int)cnt ; i += 2)
+                                printf("%s = %s\n",
+                                       arr[i], arr[i+1]);
+
+                        printf("\n");
+
+                        rd_kafka_conf_dump_free(arr, cnt);
+                }
+
+                exit(0);
+        }
+
         if (latency_mode)
                 do_seq = 0;
 
@@ -1252,6 +1283,10 @@ int main (int argc, char **argv) {
 		msgsize = (int)strlen(msgpattern);
 
 	topic = topics->elems[0].topic;
+
+        if (mode == 'C' || mode == 'G')
+                rd_kafka_conf_set(conf, "enable.partition.eof", "true",
+                                  NULL, 0);
 
 	if (mode == 'P') {
 		/*
@@ -1433,8 +1468,6 @@ int main (int argc, char **argv) {
                 if (verbosity >= 2)
                         printf("%% %i messages in outq\n", outq);
 		cnt.msgs -= outq;
-		cnt.bytes -= msgsize * outq;
-
 		cnt.t_end = t_end;
 
 		if (cnt.tx_err > 0)

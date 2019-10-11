@@ -78,6 +78,9 @@ const char *rd_kafka_op2str (rd_kafka_op_type_t type) {
                 [RD_KAFKA_OP_ALTERCONFIGS] = "REPLY:ALTERCONFIGS",
                 [RD_KAFKA_OP_DESCRIBECONFIGS] = "REPLY:DESCRIBECONFIGS",
                 [RD_KAFKA_OP_ADMIN_RESULT] = "REPLY:ADMIN_RESULT",
+                [RD_KAFKA_OP_PURGE] = "REPLY:PURGE",
+                [RD_KAFKA_OP_CONNECT] = "REPLY:CONNECT",
+                [RD_KAFKA_OP_OAUTHBEARER_REFRESH] = "REPLY:OAUTHBEARER_REFRESH"
         };
 
         if (type & RD_KAFKA_OP_REPLY)
@@ -197,6 +200,9 @@ rd_kafka_op_t *rd_kafka_op_new0 (const char *source, rd_kafka_op_type_t type) {
                 [RD_KAFKA_OP_ALTERCONFIGS] = sizeof(rko->rko_u.admin_request),
                 [RD_KAFKA_OP_DESCRIBECONFIGS] = sizeof(rko->rko_u.admin_request),
                 [RD_KAFKA_OP_ADMIN_RESULT] = sizeof(rko->rko_u.admin_result),
+                [RD_KAFKA_OP_PURGE] = sizeof(rko->rko_u.purge),
+                [RD_KAFKA_OP_CONNECT] = 0,
+                [RD_KAFKA_OP_OAUTHBEARER_REFRESH] = 0,
 	};
 	size_t tsize = op2size[type & ~RD_KAFKA_OP_FLAGMASK];
 
@@ -460,7 +466,7 @@ rd_kafka_op_t *rd_kafka_op_req0 (rd_kafka_q_t *destq,
                 return NULL;
 
         /* Wait for reply */
-        reply = rd_kafka_q_pop(recvq, timeout_ms, 0);
+        reply = rd_kafka_q_pop(recvq, rd_timeout_us(timeout_ms), 0);
 
         /* May be NULL for timeout */
         return reply;
@@ -567,6 +573,10 @@ rd_kafka_op_new_fetch_msg (rd_kafka_msg_t **rkmp,
         rko->rko_len       = (int32_t)rkm->rkm_len;
 
         rkm->rkm_partition = rktp->rktp_partition;
+
+        /* Persistence status is always PERSISTED for consumed messages
+         * since we managed to read the message. */
+        rkm->rkm_status = RD_KAFKA_MSG_STATUS_PERSISTED;
 
         return rko;
 }
