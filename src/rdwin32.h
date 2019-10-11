@@ -154,6 +154,23 @@ static RD_INLINE RD_UNUSED const char *rd_strerror(int err) {
 	return ret;
 }
 
+/**
+ * @brief strerror() for Win32 API errors as returned by GetLastError() et.al.
+ */
+static RD_UNUSED char *
+rd_strerror_w32 (DWORD errcode, char *dst, size_t dstsize) {
+        char *t;
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM |
+                       FORMAT_MESSAGE_IGNORE_INSERTS,
+                       NULL, errcode,
+                       MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                       (LPSTR)dst, (DWORD)dstsize - 1, NULL);
+        /* Remove newlines */
+        while ((t = strchr(dst, (int)'\r')) || (t = strchr(dst, (int)'\n')))
+                *t = (char)'.';
+        return dst;
+}
+
 
 /**
  * Atomics
@@ -233,6 +250,7 @@ static RD_UNUSED int rd_pipe_nonblocking (int *fds) {
         struct sockaddr_in listen_addr;
         struct sockaddr_in connect_addr;
         socklen_t sock_len = 0;
+        int bufsz;
 
         /* Create listen socket */
         listen_s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -242,11 +260,13 @@ static RD_UNUSED int rd_pipe_nonblocking (int *fds) {
         listen_addr.sin_family = AF_INET;
         listen_addr.sin_addr.s_addr = ntohl(INADDR_LOOPBACK);
         listen_addr.sin_port = 0;
-        if (bind(listen_s, (struct sockaddr*)&listen_addr, sizeof(listen_addr)) != 0)
+        if (bind(listen_s, (struct sockaddr*)&listen_addr,
+                 sizeof(listen_addr)) != 0)
                 goto err;
 
         sock_len = sizeof(connect_addr);
-        if (getsockname(listen_s, (struct sockaddr*)&connect_addr, &sock_len) != 0)
+        if (getsockname(listen_s, (struct sockaddr*)&connect_addr,
+                        &sock_len) != 0)
                 goto err;
 
         if (listen(listen_s, 1) != 0)
@@ -257,7 +277,8 @@ static RD_UNUSED int rd_pipe_nonblocking (int *fds) {
         if (connect_s == INVALID_SOCKET)
                 goto err;
 
-        if (connect(connect_s, (struct sockaddr*)&connect_addr, sizeof(connect_addr)) == SOCKET_ERROR)
+        if (connect(connect_s, (struct sockaddr*)&connect_addr,
+                    sizeof(connect_addr)) == SOCKET_ERROR)
                 goto err;
 
         /* Wait for incoming connection */
@@ -274,8 +295,25 @@ static RD_UNUSED int rd_pipe_nonblocking (int *fds) {
         if (rd_fd_set_nonblocking((int)connect_s) != 0)
                 goto err;
 
-        /* Store resulting sockets. They are bidirectional, so it does not matter
-         * which is read or write side of pipe. */
+        /* Minimize buffer sizes to avoid a large number
+         * of signaling bytes to accumulate when
+         * io-signalled queue is not being served for a while. */
+        bufsz = 100;
+        setsockopt(accept_s, SOL_SOCKET, SO_SNDBUF,
+                   (const char *)&bufsz, sizeof(bufsz));
+        bufsz = 100;
+        setsockopt(accept_s, SOL_SOCKET, SO_RCVBUF,
+                   (const char *)&bufsz, sizeof(bufsz));
+        bufsz = 100;
+        setsockopt(connect_s, SOL_SOCKET, SO_SNDBUF,
+                   (const char *)&bufsz, sizeof(bufsz));
+        bufsz = 100;
+        setsockopt(connect_s, SOL_SOCKET, SO_RCVBUF,
+                   (const char *)&bufsz, sizeof(bufsz));
+
+        /* Store resulting sockets.
+         * They are bidirectional, so it does not matter which is read or
+         * write side of pipe. */
         fds[0] = (int)accept_s;
         fds[1] = (int)connect_s;
         return 0;
@@ -293,20 +331,6 @@ static RD_UNUSED int rd_pipe_nonblocking (int *fds) {
 #define rd_read(fd,buf,sz) recv(fd,buf,sz,0)
 #define rd_write(fd,buf,sz) send(fd,buf,sz,0)
 #define rd_close(fd) closesocket(fd)
-
-static RD_UNUSED char *
-rd_strerror_w32 (DWORD errcode, char *dst, size_t dstsize) {
-        char *t;
-        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM |
-                       FORMAT_MESSAGE_IGNORE_INSERTS,
-                       NULL, errcode,
-                       MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                       (LPSTR)dst, (DWORD)dstsize - 1, NULL);
-        /* Remove newlines */
-        while ((t = strchr(dst, (int)'\r')) || (t = strchr(dst, (int)'\n')))
-                *t = (char)'.';
-        return dst;
-}
 
 #endif /* !__cplusplus*/
 

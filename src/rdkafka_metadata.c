@@ -32,6 +32,7 @@
 #include "rdkafka_topic.h"
 #include "rdkafka_broker.h"
 #include "rdkafka_request.h"
+#include "rdkafka_idempotence.h"
 #include "rdkafka_metadata.h"
 
 #include <string.h>
@@ -51,7 +52,8 @@ rd_kafka_metadata (rd_kafka_t *rk, int all_topics,
 
         /* Query any broker that is up, and if none are up pick the first one,
          * if we're lucky it will be up before the timeout */
-	rkb = rd_kafka_broker_any_usable(rk, timeout_ms, 1);
+        rkb = rd_kafka_broker_any_usable(rk, timeout_ms, 1,
+                                         "application metadata request");
 	if (!rkb)
 		return RD_KAFKA_RESP_ERR__TRANSPORT;
 
@@ -78,7 +80,7 @@ rd_kafka_metadata (rd_kafka_t *rk, int all_topics,
         rd_kafka_broker_destroy(rkb);
 
         /* Wait for reply (or timeout) */
-        rko = rd_kafka_q_pop(rkq, rd_timeout_remains(ts_end), 0);
+        rko = rd_kafka_q_pop(rkq, rd_timeout_remains_us(ts_end), 0);
 
         rd_kafka_q_destroy_owner(rkq);
 
@@ -581,12 +583,16 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
         }
 
         /* Check if cgrp effective subscription is affected by
-         * new metadata. */
-        if (rkb->rkb_rk->rk_cgrp)
+         * new topic metadata.
+         * Ignore if this was a broker-only refresh (no topics) */
+        if ((requested_topics || all_topics) && rkb->rkb_rk->rk_cgrp)
                 rd_kafka_cgrp_metadata_update_check(
                         rkb->rkb_rk->rk_cgrp, 1/*do join*/);
 
-
+        /* Try to acquire a Producer ID from this broker if we
+         * don't have one. */
+        if (rd_kafka_is_idempotent(rkb->rkb_rk))
+                rd_kafka_idemp_request_pid(rkb->rkb_rk, rkb, "metadata update");
 
 done:
         if (missing_topics)
@@ -777,7 +783,8 @@ rd_kafka_metadata_refresh_topics (rd_kafka_t *rk, rd_kafka_broker_t *rkb,
         rd_kafka_wrlock(rk);
 
         if (!rkb) {
-                if (!(rkb = rd_kafka_broker_any_usable(rk, RD_POLL_NOWAIT, 0))){
+                if (!(rkb = rd_kafka_broker_any_usable(rk, RD_POLL_NOWAIT, 0,
+                                                       reason))) {
                         rd_kafka_wrunlock(rk);
                         rd_kafka_dbg(rk, METADATA, "METADATA",
                                      "Skipping metadata refresh of %d topic(s):"
@@ -909,7 +916,8 @@ rd_kafka_metadata_refresh_all (rd_kafka_t *rk, rd_kafka_broker_t *rkb,
                 rk = rkb->rkb_rk;
 
         if (!rkb) {
-                if (!(rkb = rd_kafka_broker_any_usable(rk, RD_POLL_NOWAIT, 1)))
+                if (!(rkb = rd_kafka_broker_any_usable(rk, RD_POLL_NOWAIT, 1,
+                                                       reason)))
                         return RD_KAFKA_RESP_ERR__TRANSPORT;
                 destroy_rkb = 1;
         }
@@ -940,7 +948,8 @@ rd_kafka_metadata_request (rd_kafka_t *rk, rd_kafka_broker_t *rkb,
         int destroy_rkb = 0;
 
         if (!rkb) {
-                if (!(rkb = rd_kafka_broker_any_usable(rk, RD_POLL_NOWAIT, 1)))
+                if (!(rkb = rd_kafka_broker_any_usable(rk, RD_POLL_NOWAIT, 1,
+                                                       reason)))
                         return RD_KAFKA_RESP_ERR__TRANSPORT;
                 destroy_rkb = 1;
         }

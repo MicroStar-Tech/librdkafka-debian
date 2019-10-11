@@ -403,18 +403,6 @@ int _cnd_timedwait_win32(cnd_t *cond, mtx_t *mtx, DWORD timeout)
   /* Wait for either event to become signaled due to cnd_signal() or
      cnd_broadcast() being called */
   result = WaitForMultipleObjects(2, cond->mEvents, FALSE, timeout);
-  if (result == WAIT_TIMEOUT)
-  {
-    /* The mutex is locked again before the function returns, even if an error occurred */
-    mtx_lock(mtx);
-    return thrd_timedout;
-  }
-  else if (result == (int)WAIT_FAILED)
-  {
-    /* The mutex is locked again before the function returns, even if an error occurred */
-    mtx_lock(mtx);
-    return thrd_error;
-  }
 
   /* Check if we are the last waiter */
   EnterCriticalSection(&cond->mWaitersCountLock);
@@ -434,8 +422,13 @@ int _cnd_timedwait_win32(cnd_t *cond, mtx_t *mtx, DWORD timeout)
     }
   }
 
-  /* Re-acquire the mutex */
+  /* The mutex is locked again before the function returns, even if an error occurred */
   mtx_lock(mtx);
+
+  if (result == WAIT_TIMEOUT)
+            return thrd_timedout;
+  else if (result == (int)WAIT_FAILED)
+            return thrd_error;
 
   return thrd_success;
 }
@@ -544,9 +537,9 @@ static void NTAPI _tinycthread_tss_callback(PVOID h, DWORD dwReason, PVOID pv)
   #endif
   PIMAGE_TLS_CALLBACK p_thread_callback = _tinycthread_tss_callback;
   #ifdef _M_X64
-    #pragma data_seg()
-  #else
     #pragma const_seg()
+  #else
+    #pragma data_seg()
   #endif
 #else
   PIMAGE_TLS_CALLBACK p_thread_callback __attribute__((section(".CRT$XLB"))) = _tinycthread_tss_callback;

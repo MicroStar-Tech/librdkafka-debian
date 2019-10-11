@@ -1752,13 +1752,10 @@ rd_kafka_CreatePartitionsResponse_parse (rd_kafka_op_t *rko_req,
                                 RD_KAFKAP_STR_DUPA(&errstr, &error_msg);
                 }
 
-
                 terr = rd_kafka_topic_result_new(ktopic.str,
                                                  RD_KAFKAP_STR_LEN(&ktopic),
                                                  error_code,
-                                                 error_code ?
-                                                 rd_kafka_err2str(error_code) :
-                                                 NULL);
+                                                 error_code ? errstr : NULL);
 
                 /* As a convenience to the application we insert topic result
                  * in the same order as they were requested. The broker
@@ -2082,8 +2079,9 @@ void rd_kafka_ConfigResource_destroy_array (rd_kafka_ConfigResource_t **config,
  */
 static int rd_kafka_ConfigResource_cmp (const void *_a, const void *_b) {
         const rd_kafka_ConfigResource_t *a = _a, *b = _b;
-        if (a->restype != b->restype)
-                return a->restype - b->restype;
+        int r = RD_CMP(a->restype, b->restype);
+        if (r)
+                return r;
         return strcmp(a->name, b->name);
 }
 
