@@ -2,7 +2,7 @@ Source: librdkafka
 Priority: optional
 Maintainer: Faidon Liambotis <paravoid@debian.org>
 Uploaders: Christos Trochalakis <ctrochalakis@debian.org>
-Build-Depends: debhelper (>= 10),
+Build-Depends: debhelper-compat (= 12),
                liblz4-dev (>= 0.0~r123),
                libsasl2-dev,
                libssl-dev,
