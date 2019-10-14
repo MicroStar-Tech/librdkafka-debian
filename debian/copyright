@@ -74,6 +74,7 @@ License: public-domain
 
 Files: debian/*
 Copyright: 2013 Faidon Liambotis <paravoid@debian.org>
+           2018 ChangZhuo Chen (陳昌倬) <czchen@debian.org>
 License: BSD-2-clause
 
 License: BSD-2-clause
