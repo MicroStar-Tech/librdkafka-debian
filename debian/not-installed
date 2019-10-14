@@ -1,0 +1,2 @@
+usr/lib/*/pkgconfig/rdkafka-static.pc
+usr/lib/*/pkgconfig/rdkafka++-static.pc

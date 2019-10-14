@@ -25,3 +25,6 @@ override_dh_auto_configure:
 		--libexecdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
 		--disable-maintainer-mode \
 		--disable-dependency-tracking
+
+override_dh_missing:
+	dh_missing --list-missing --fail-missing
