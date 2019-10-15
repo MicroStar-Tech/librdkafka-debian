@@ -1,8 +1,16 @@
-librdkafka (1.2.1-1) UNRELEASED; urgency=medium
+librdkafka (1.2.1-1) unstable; urgency=medium
 
   * New upstream release.
+  * Bump Standards-Version to 4.4.1.
+  * Bump compat to 12.
+    * Use debhelper-compat.
+    * Override dh_auto_configure for not supported "--runstatedir=/run".
+  * Remove upstream applied patch.
+  * Remove unused override_dh_strip.
+  * Set Rules-Requires-Root: no.
+  * Add ChangZhuo Chen (陳昌倬) as Uploaders.
 
- -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Fri, 11 Oct 2019 18:57:30 +0800
+ -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Tue, 15 Oct 2019 12:19:40 +0800
 
 librdkafka (0.11.6-1.1) unstable; urgency=medium
 
