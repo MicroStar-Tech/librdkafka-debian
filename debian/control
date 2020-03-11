@@ -9,7 +9,7 @@ Build-Depends: debhelper-compat (= 12),
                libssl-dev,
                python3,
                zlib1g-dev
-Standards-Version: 4.4.1
+Standards-Version: 4.5.0
 Rules-Requires-Root: no
 Section: libs
 Homepage: https://github.com/edenhill/librdkafka
