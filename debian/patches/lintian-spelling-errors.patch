@@ -1,0 +1,35 @@
+From: Christian Barcenas <christian@cbarcenas.com>
+Date: Wed, 11 Mar 2020 01:01:13 -0700
+Subject: Fix spelling errors (detected by lintian)
+
+---
+ src/rdkafka_mock.c       | 2 +-
+ src/rdkafka_sasl_scram.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/rdkafka_mock.c b/src/rdkafka_mock.c
+index 0f83916..b56aeae 100644
+--- a/src/rdkafka_mock.c
++++ b/src/rdkafka_mock.c
+@@ -1521,7 +1521,7 @@ rd_kafka_mock_cluster_cmd (rd_kafka_mock_cluster_t *mcluster,
+ 
+                 rd_kafka_dbg(mcluster->rk, MOCK, "MOCK",
+                              "Set %s [%"PRId32"] follower "
+-                             "watermark offets to %"PRId64"..%"PRId64,
++                             "watermark offsets to %"PRId64"..%"PRId64,
+                              rko->rko_u.mock.name, rko->rko_u.mock.partition,
+                              rko->rko_u.mock.lo, rko->rko_u.mock.hi);
+ 
+diff --git a/src/rdkafka_sasl_scram.c b/src/rdkafka_sasl_scram.c
+index 163bcbd..89d2693 100644
+--- a/src/rdkafka_sasl_scram.c
++++ b/src/rdkafka_sasl_scram.c
+@@ -695,7 +695,7 @@ rd_kafka_sasl_scram_handle_server_final_message (
+                  * but we need to verify the ServerSignature too. */
+                 rd_rkb_dbg(rktrans->rktrans_rkb, SECURITY | RD_KAFKA_DBG_BROKER,
+                            "SCRAMAUTH",
+-                           "SASL SCRAM authentication succesful on server: "
++                           "SASL SCRAM authentication successful on server: "
+                            "verifying ServerSignature");
+ 
+                 if (strcmp(attr_v, state->ServerSignatureB64)) {
