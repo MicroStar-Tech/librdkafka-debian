@@ -168,6 +168,16 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_message_timestamp@Base 0.9.1
  rd_kafka_metadata@Base 0.8.4
  rd_kafka_metadata_destroy@Base 0.8.4
+ rd_kafka_mock_broker_set_rack@Base 1.3.0
+ rd_kafka_mock_cluster_bootstraps@Base 1.3.0
+ rd_kafka_mock_cluster_destroy@Base 1.3.0
+ rd_kafka_mock_cluster_handle@Base 1.3.0
+ rd_kafka_mock_cluster_new@Base 1.3.0
+ rd_kafka_mock_partition_set_follower@Base 1.3.0
+ rd_kafka_mock_partition_set_follower_wmarks@Base 1.3.0
+ rd_kafka_mock_partition_set_leader@Base 1.3.0
+ rd_kafka_mock_push_request_errors@Base 1.3.0
+ rd_kafka_mock_topic_set_error@Base 1.3.0
  rd_kafka_msg_partitioner_consistent@Base 0.9.0
  rd_kafka_msg_partitioner_consistent_random@Base 0.9.1
  rd_kafka_msg_partitioner_murmur2@Base 0.11.4
