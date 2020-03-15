@@ -150,6 +150,14 @@ _TEST_DECL(0064_interceptors);
 _TEST_DECL(0065_yield);
 _TEST_DECL(0066_plugins);
 _TEST_DECL(0067_empty_topic);
+_TEST_DECL(0068_produce_timeout);
+_TEST_DECL(0069_consumer_add_parts);
+_TEST_DECL(0070_null_empty);
+
+
+/* Manual tests */
+_TEST_DECL(8000_idle);
+
 
 /**
  * Define all tests here
@@ -179,7 +187,7 @@ struct test tests[] = {
         _TEST(0022_consume_batch, 0),
         _TEST(0025_timers, TEST_F_LOCAL),
 	_TEST(0026_consume_pause, 0, TEST_BRKVER(0,9,0,0)),
-	_TEST(0028_long_topicnames, TEST_F_KNOWN_ISSUE,
+	_TEST(0028_long_topicnames, TEST_F_KNOWN_ISSUE, TEST_BRKVER(0,9,0,0),
 	      .extra = "https://github.com/edenhill/librdkafka/issues/529"),
 	_TEST(0029_assign_offset, 0),
 	_TEST(0030_offset_commit, 0, TEST_BRKVER(0,9,0,0)),
@@ -212,7 +220,7 @@ struct test tests[] = {
         _TEST(0051_assign_adds, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0052_msg_timestamps, 0, TEST_BRKVER(0,10,0,0)),
         _TEST(0053_stats_cb, TEST_F_LOCAL),
-        _TEST(0054_offset_time, 0, TEST_BRKVER(0,10,0,0)),
+        _TEST(0054_offset_time, 0, TEST_BRKVER(0,10,1,0)),
         _TEST(0055_producer_latency, TEST_F_KNOWN_ISSUE_WIN32),
         _TEST(0056_balanced_group_mt, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0057_invalid_topic, 0, TEST_BRKVER(0,9,0,0)),
@@ -221,13 +229,23 @@ struct test tests[] = {
         _TEST(0060_op_prio, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0061_consumer_lag, 0),
         _TEST(0062_stats_event, TEST_F_LOCAL),
-        _TEST(0063_clusterid, 0, TEST_BRKVER(0,10,0,0)),
-        _TEST(0064_interceptors, 0),
+        _TEST(0063_clusterid, 0, TEST_BRKVER(0,10,1,0)),
+        _TEST(0064_interceptors, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0065_yield, 0),
         _TEST(0066_plugins,
               TEST_F_LOCAL|TEST_F_KNOWN_ISSUE_WIN32|TEST_F_KNOWN_ISSUE_OSX,
               .extra = "dynamic loading of tests might not be fixed for this platform"),
         _TEST(0067_empty_topic, 0),
+#if WITH_SOCKEM
+        _TEST(0068_produce_timeout, 0),
+#endif
+        _TEST(0069_consumer_add_parts, TEST_F_KNOWN_ISSUE_WIN32,
+              TEST_BRKVER(0,9,0,0)),
+        _TEST(0070_null_empty, 0),
+
+        /* Manual tests */
+        _TEST(8000_idle, TEST_F_MANUAL),
+
         { NULL }
 };
 
@@ -350,6 +368,15 @@ void test_timeout_set (int timeout) {
 	test_curr->timeout = test_clock() + (timeout * 1000000);
 	TEST_UNLOCK();
 }
+
+int tmout_multip (int msecs) {
+        int r;
+        TEST_LOCK();
+        r = (int)(((double)(msecs)) * test_timeout_multiplier);
+        TEST_UNLOCK();
+        return r;
+}
+
 
 
 #ifdef _MSC_VER
@@ -857,7 +884,8 @@ static int run_test (struct test *test, int argc, char **argv) {
                 TEST_LOCK();
         }
         tests_running_cnt++;
-	test->timeout = test_clock() + (20 * 1000000);
+        test->timeout = test_clock() + (int64_t)(20.0 * 1000000.0 *
+                                                 test_timeout_multiplier);
         test->state = TEST_RUNNING;
         TEST_UNLOCK();
 
@@ -913,6 +941,8 @@ static void run_tests (const char *tests_to_run,
 
                 if (tests_to_run && !strstr(tests_to_run, testnum))
                         skip_reason = "not included in TESTS list";
+                else if (!tests_to_run && (test->flags & TEST_F_MANUAL))
+                        skip_reason = "manual test";
 
                 if (!skip_reason) {
                         run_test(test, argc, argv);
@@ -1258,21 +1288,29 @@ int main(int argc, char **argv) {
 	if (!strcmp(test_mode, "helgrind") ||
 	    !strcmp(test_mode, "drd")) {
 		TEST_LOCK();
-		test_timeout_multiplier *= 5;
+		test_timeout_multiplier += 5;
 		TEST_UNLOCK();
 	} else if (!strcmp(test_mode, "valgrind")) {
 		TEST_LOCK();
-		test_timeout_multiplier *= 3;
+		test_timeout_multiplier += 3;
 		TEST_UNLOCK();
 	}
 
-        if (test_concurrent_max >= 3)
-                test_timeout_multiplier *= (double)test_concurrent_max / 3.0;
+        /* Broker version 0.9 and api.version.request=true (which is default)
+         * will cause a 10s stall per connection. Instead of fixing
+         * that for each affected API in every test we increase the timeout
+         * multiplier accordingly instead. The typical consume timeout is 5
+         * seconds, so a multiplier of 3 should be good. */
+        if ((test_broker_version & 0xffff0000) == 0x00090000)
+                test_timeout_multiplier += 3;
+
+        test_timeout_multiplier += (double)test_concurrent_max / 3;
 
 	TEST_SAY("Tests to run: %s\n", tests_to_run ? tests_to_run : "all");
 	TEST_SAY("Test mode   : %s\n", test_mode);
         TEST_SAY("Test filter : %s\n",
                  (test_flags & TEST_F_LOCAL) ? "local tests only" : "no filter");
+        TEST_SAY("Test timeout multiplier: %.1f\n", test_timeout_multiplier);
         TEST_SAY("Action on test failure: %s\n",
                  test_assert_on_fail ? "assert crash" : "continue other tests");
 

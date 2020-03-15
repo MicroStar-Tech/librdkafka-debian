@@ -56,6 +56,8 @@ struct rd_kafka_property {
                 _RK_C_KSTR, /* Kafka string */
                 _RK_C_ALIAS, /* Alias: points to other property through .sdef */
                 _RK_C_INTERNAL, /* Internal, don't expose to application */
+                _RK_C_INVALID,  /* Invalid property, used to catch known
+                                 * but unsupported Java properties. */
 	} type;
 	int   offset;
 	const char *desc;
@@ -166,7 +168,7 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  "See metadata.broker.list",
 	  .sdef = "metadata.broker.list" },
 	{ _RK_GLOBAL, "message.max.bytes", _RK_C_INT, _RK(max_msg_size),
-	  "Maximum transmit message size.",
+	  "Maximum Kafka protocol request message size.",
 	  1000, 1000000000, 1000000 },
 	{ _RK_GLOBAL, "message.copy.max.bytes", _RK_C_INT,
 	  _RK(msg_copy_max_size),
@@ -176,7 +178,7 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  0, 1000000000, 0xffff },
 	{ _RK_GLOBAL, "receive.message.max.bytes", _RK_C_INT,
           _RK(recv_max_msg_size),
-	  "Maximum receive message size. "
+	  "Maximum Kafka protocol response message size. "
 	  "This is a safety precaution to avoid memory exhaustion in case of "
 	  "protocol hickups. "
           "The value should be at least fetch.message.max.bytes * number of "
@@ -184,8 +186,11 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  1000, 1000000000, 100000000 },
 	{ _RK_GLOBAL, "max.in.flight.requests.per.connection", _RK_C_INT,
 	  _RK(max_inflight),
-	  "Maximum number of in-flight requests the client will send. "
-	  "This setting applies per broker connection.",
+	  "Maximum number of in-flight requests per broker connection. "
+	  "This is a generic property applied to all broker communication, "
+	  "however it is primarily relevant to produce requests. "
+	  "In particular, note that other mechanisms limit the number "
+	  "of outstanding consumer fetch request per broker to one.",
 	  1, 1000000, 1000000 },
         { _RK_GLOBAL, "max.in.flight", _RK_C_ALIAS,
           .sdef = "max.in.flight.requests.per.connection" },
@@ -392,6 +397,10 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  "**NOTE**: Depends on broker version >=0.10.0. If the request is not "
 	  "supported by (an older) broker the `broker.version.fallback` fallback is used.",
 	  0, 1, 1 },
+	{ _RK_GLOBAL, "api.version.request.timeout.ms", _RK_C_INT,
+	  _RK(api_version_request_timeout_ms),
+	  "Timeout for broker API version requests.",
+	  1, 5*60*1000, 10*1000 },
 	{ _RK_GLOBAL, "api.version.fallback.ms", _RK_C_INT,
 	  _RK(api_version_fallback_ms),
 	  "Dictates how long the `broker.version.fallback` fallback is used "
@@ -410,7 +419,8 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  "version and the client will automatically adjust its feature set "
 	  "accordingly if the ApiVersionRequest fails (or is disabled). "
 	  "The fallback broker version will be used for `api.version.fallback.ms`. "
-	  "Valid values are: 0.9.0, 0.8.2, 0.8.1, 0.8.0.",
+          "Valid values are: 0.9.0, 0.8.2, 0.8.1, 0.8.0. Any other value, "
+          "such as 0.10.2.1, enables ApiVersionRequests.",
 	  .sdef = "0.9.0",
 	  .validate = rd_kafka_conf_validate_broker_version },
 
@@ -462,6 +472,27 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  "Path to CRL for verifying broker's certificate validity."
 	},
 #endif /* WITH_SSL */
+
+        /* Point user in the right direction if they try to apply
+         * Java client SSL / JAAS properties. */
+        { _RK_GLOBAL, "ssl.keystore.location", _RK_C_INVALID,
+          _RK(dummy),
+          "Java KeyStores are not supported, use `ssl.key.location` and "
+          "a private key (PEM) file instead. "
+          "See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka for more information."
+        },
+        { _RK_GLOBAL, "ssl.truststore.location", _RK_C_INVALID,
+          _RK(dummy),
+          "Java TrustStores are not supported, use `ssl.ca.location` "
+          "and a certificate file instead. "
+          "See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka for more information."
+        },
+        { _RK_GLOBAL, "sasl.jaas.config", _RK_C_INVALID,
+          _RK(dummy),
+          "Java JAAS configuration is not supported, see "
+          "https://github.com/edenhill/librdkafka/wiki/Using-SASL-with-librdkafka "
+          "for more information."
+        },
 
 	{_RK_GLOBAL,"sasl.mechanisms", _RK_C_STR,
 	 _RK(sasl.mechanisms),
@@ -575,14 +606,15 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           0, 1, 1 },
 	{ _RK_GLOBAL|_RK_CONSUMER, "queued.min.messages", _RK_C_INT,
 	  _RK(queued_min_msgs),
-	  "Minimum number of messages per topic+partition in the "
-          "local consumer queue.",
+	  "Minimum number of messages per topic+partition "
+          "librdkafka tries to maintain in the local consumer queue.",
 	  1, 10000000, 100000 },
 	{ _RK_GLOBAL|_RK_CONSUMER, "queued.max.messages.kbytes", _RK_C_INT,
 	  _RK(queued_max_msg_kbytes),
           "Maximum number of kilobytes per topic+partition in the "
           "local consumer queue. "
-          "This value may be overshot by fetch.message.max.bytes.",
+	  "This value may be overshot by fetch.message.max.bytes. "
+	  "This property has higher priority than queued.min.messages.",
           1, 1000000000, 1000000 /* 1 Gig */ },
 	{ _RK_GLOBAL|_RK_CONSUMER, "fetch.wait.max.ms", _RK_C_INT,
 	  _RK(fetch_wait_max_ms),
@@ -652,12 +684,17 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  1, 10000000, 100000 },
 	{ _RK_GLOBAL|_RK_PRODUCER, "queue.buffering.max.kbytes", _RK_C_INT,
 	  _RK(queue_buffering_max_kbytes),
-	  "Maximum total message size sum allowed on the producer queue.",
+	  "Maximum total message size sum allowed on the producer queue. "
+	  "This property has higher priority than queue.buffering.max.messages.",
 	  1, INT_MAX/1024, 4000000 },
 	{ _RK_GLOBAL|_RK_PRODUCER, "queue.buffering.max.ms", _RK_C_INT,
 	  _RK(buffering_max_ms),
-	  "Maximum time, in milliseconds, for buffering data "
-	  "on the producer queue.",
+	  "Delay in milliseconds to wait for messages in the producer queue "
+          "to accumulate before constructing message batches (MessageSets) to "
+          "transmit to brokers. "
+	  "A higher value allows larger and more effective "
+          "(less overhead, improved compression) batches of messages to "
+          "accumulate at the expense of increased message delivery latency.",
 	  0, 900*1000, 0 },
         { _RK_GLOBAL|_RK_PRODUCER, "linger.ms", _RK_C_ALIAS,
           .sdef = "queue.buffering.max.ms" },
@@ -1219,6 +1256,16 @@ rd_kafka_anyconf_set_prop (int scope, void *conf,
 		return RD_KAFKA_CONF_OK;
 	}
 
+        case _RK_C_INTERNAL:
+                rd_snprintf(errstr, errstr_size,
+                            "Internal property \"%s\" not settable",
+                            prop->name);
+                return RD_KAFKA_CONF_INVALID;
+
+        case _RK_C_INVALID:
+                rd_snprintf(errstr, errstr_size, "%s", prop->desc);
+                return RD_KAFKA_CONF_INVALID;
+
 	default:
                 rd_kafka_assert(NULL, !*"unknown conf type");
 	}
@@ -1236,7 +1283,7 @@ static void rd_kafka_defaultconf_set (int scope, void *conf) {
 		if (!(prop->scope & scope))
 			continue;
 
-		if (prop->type == _RK_C_ALIAS)
+		if (prop->type == _RK_C_ALIAS || prop->type == _RK_C_INVALID)
 			continue;
 
                 if (prop->ctor)
@@ -1465,7 +1512,7 @@ static void rd_kafka_anyconf_copy (int scope, void *dst, const void *src,
 		if (!(prop->scope & scope))
 			continue;
 
-		if (prop->type == _RK_C_ALIAS)
+		if (prop->type == _RK_C_ALIAS || prop->type == _RK_C_INVALID)
 			continue;
 
                 /* Apply filter, if any. */
@@ -1745,7 +1792,7 @@ size_t rd_kafka_conf_flags2str (char *dest, size_t dest_size, const char *delim,
 	size_t of = 0;
 	int j;
 
-	if (dest)
+	if (dest && dest_size > 0)
 		*dest = '\0';
 
 	/* Phase 1: scan for set flags, accumulate needed size.
@@ -1774,7 +1821,7 @@ size_t rd_kafka_conf_flags2str (char *dest, size_t dest_size, const char *delim,
 		}
 	}
 
-	return of;
+	return of+1/*nul*/;
 }
 
 
@@ -1942,8 +1989,9 @@ static const char **rd_kafka_anyconf_dump (int scope, const void *conf,
 		if (!(prop->scope & scope))
 			continue;
 
-		/* Skip aliases, show original property instead. */
-		if (prop->type == _RK_C_ALIAS)
+		/* Skip aliases, show original property instead.
+                 * Skip invalids. */
+		if (prop->type == _RK_C_ALIAS || prop->type == _RK_C_INVALID)
 			continue;
 
                 /* Query value size */
@@ -1995,6 +2043,10 @@ void rd_kafka_conf_properties_show (FILE *fp) {
 
 	for (prop = rd_kafka_properties; prop->name ; prop++) {
 		const char *typeinfo = "";
+
+                /* Skip invalid properties. */
+                if (prop->type == _RK_C_INVALID)
+                        continue;
 
 		if (!(prop->scope & last)) {
 			fprintf(fp,
@@ -2080,7 +2132,6 @@ void rd_kafka_conf_properties_show (FILE *fp) {
 			fprintf(fp, "%13s", tmp);
 
 			break;
-
 		case _RK_C_PTR:
 			typeinfo = "pointer";
 			/* FALLTHRU */

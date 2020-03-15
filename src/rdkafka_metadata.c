@@ -70,6 +70,8 @@ rd_kafka_metadata (rd_kafka_t *rk, int all_topics,
         /* Async: request metadata */
         rko = rd_kafka_op_new(RD_KAFKA_OP_METADATA);
         rd_kafka_op_set_replyq(rko, rkq, 0);
+        rko->rko_u.metadata.force = 1; /* Force metadata request regardless
+                                        * of outstanding metadata requests. */
         rd_kafka_MetadataRequest(rkb, &topics, "application requested", rko);
 
         rd_list_destroy(&topics);
@@ -92,9 +94,9 @@ rd_kafka_metadata (rd_kafka_t *rk, int all_topics,
         }
 
         /* Reply: pass metadata pointer to application who now owns it*/
-        rd_kafka_assert(rk, rko->rko_u.metadata);
-        *metadatap = rko->rko_u.metadata;
-        rko->rko_u.metadata = NULL;
+        rd_kafka_assert(rk, rko->rko_u.metadata.md);
+        *metadatap = rko->rko_u.metadata.md;
+        rko->rko_u.metadata.md = NULL;
         rd_kafka_op_destroy(rko);
 
         return RD_KAFKA_RESP_ERR_NO_ERROR;
@@ -212,7 +214,7 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
         rd_tmpabuf_t tbuf;
         struct rd_kafka_metadata *md;
         size_t rkb_namelen;
-        const int log_decode_errors = 1;
+        const int log_decode_errors = LOG_ERR;
         rd_list_t *missing_topics = NULL;
         const rd_list_t *requested_topics = request->rkbuf_u.Metadata.topics;
         int all_topics = request->rkbuf_u.Metadata.all_topics;
@@ -887,6 +889,7 @@ rd_kafka_metadata_refresh_all (rd_kafka_t *rk, rd_kafka_broker_t *rkb,
 
 
 /**
+
  * @brief Lower-level Metadata request that takes a callback (with replyq set)
  *        which will be triggered after parsing is complete.
  *
@@ -944,7 +947,7 @@ static void rd_kafka_metadata_leader_query_tmr_cb (rd_kafka_timers_t *rkts,
                 no_leader = rkt->rkt_flags & RD_KAFKA_TOPIC_F_LEADER_UNAVAIL;
 
                 /* Check if any partitions are missing their leaders. */
-                for (i = 0 ; i < rkt->rkt_partition_cnt || no_leader ; i++) {
+                for (i = 0 ; !no_leader && i < rkt->rkt_partition_cnt ; i++) {
                         rd_kafka_toppar_t *rktp =
                                 rd_kafka_toppar_s2i(rkt->rkt_p[i]);
                         rd_kafka_toppar_lock(rktp);

@@ -434,7 +434,14 @@ static void rd_kafka_transport_ssl_lock_cb (int mode, int i,
 }
 
 static unsigned long rd_kafka_transport_ssl_threadid_cb (void) {
-	return (unsigned long)(intptr_t)thrd_current();
+#ifdef _MSC_VER
+        /* Windows makes a distinction between thread handle
+         * and thread id, which means we can't use the
+         * thrd_current() API that returns the handle. */
+        return (unsigned long)GetCurrentThreadId();
+#else
+        return (unsigned long)(intptr_t)thrd_current();
+#endif
 }
 
 
@@ -740,7 +747,7 @@ static int rd_kafka_transport_ssl_verify (rd_kafka_transport_t *rktrans) {
  *
  * Returns -1 on error, 0 if handshake is still in progress, or 1 on completion.
  */
-static int rd_kafka_transport_ssl_handhsake (rd_kafka_transport_t *rktrans) {
+static int rd_kafka_transport_ssl_handshake (rd_kafka_transport_t *rktrans) {
 	rd_kafka_broker_t *rkb = rktrans->rktrans_rkb;
 	char errstr[512];
 	int r;
@@ -978,7 +985,7 @@ int rd_kafka_transport_framed_recv (rd_kafka_transport_t *rktrans,
                                     char *errstr, size_t errstr_size) {
 	rd_kafka_buf_t *rkbuf = rktrans->rktrans_recv_buf;
 	ssize_t r;
-	const int log_decode_errors = 0;
+	const int log_decode_errors = LOG_ERR;
 
 	/* States:
 	 *   !rktrans_recv_buf: initial state; set up buf to receive header.
@@ -1205,7 +1212,7 @@ static void rd_kafka_transport_io_event (rd_kafka_transport_t *rktrans,
 		if (rktrans->rktrans_ssl) {
 			/* Currently setting up SSL connection:
 			 * perform handshake. */
-			rd_kafka_transport_ssl_handhsake(rktrans);
+			rd_kafka_transport_ssl_handshake(rktrans);
 			return;
 		}
 #endif
