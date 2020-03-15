@@ -59,6 +59,12 @@ struct rd_kafka_q_s {
                                       * Flag is cleared on destroy */
 #define RD_KAFKA_Q_F_FWD_APP    0x4  /* Queue is being forwarded by a call
                                       * to rd_kafka_queue_forward. */
+#define RD_KAFKA_Q_F_YIELD      0x8  /* Have waiters return even if
+                                      * no rko was enqueued.
+                                      * This is used to wake up a waiter
+                                      * by triggering the cond-var
+                                      * but without having to enqueue
+                                      * an op. */
 
         rd_kafka_t   *rkq_rk;
 	struct rd_kafka_q_io *rkq_qio;   /* FD-based application signalling */
@@ -84,6 +90,8 @@ struct rd_kafka_q_io {
 	int    fd;
 	void  *payload;
 	size_t size;
+        rd_ts_t ts_rate;  /**< How often the IO wakeup may be performed (us) */
+        rd_ts_t ts_last;  /**< Last IO wakeup */
         /* For callback-based signalling */
         void (*event_cb) (rd_kafka_t *rk, void *opaque);
         void *event_cb_opaque;
@@ -278,11 +286,12 @@ static RD_INLINE RD_UNUSED int rd_kafka_q_is_fwded (rd_kafka_q_t *rkq) {
 /**
  * @brief Trigger an IO event for this queue.
  *
+ * @param rate_limit if true, rate limit IO-based wakeups.
+ *
  * @remark Queue MUST be locked
  */
 static RD_INLINE RD_UNUSED
-void rd_kafka_q_io_event (rd_kafka_q_t *rkq) {
-	ssize_t r;
+void rd_kafka_q_io_event (rd_kafka_q_t *rkq, rd_bool_t rate_limit) {
 
 	if (likely(!rkq->rkq_qio))
 		return;
@@ -292,18 +301,19 @@ void rd_kafka_q_io_event (rd_kafka_q_t *rkq) {
                 return;
         }
 
-        r = rd_write(rkq->rkq_qio->fd, rkq->rkq_qio->payload, (int)rkq->rkq_qio->size);
-	if (r == -1) {
-		fprintf(stderr,
-			"[ERROR:librdkafka:rd_kafka_q_io_event: "
-			"write(%d,..,%d) failed on queue %p \"%s\": %s: "
-			"disabling further IO events]\n",
-			rkq->rkq_qio->fd, (int)rkq->rkq_qio->size,
-			rkq, rd_kafka_q_name(rkq), rd_strerror(errno));
-		/* FIXME: Log this, somehow */
-		rd_free(rkq->rkq_qio);
-		rkq->rkq_qio = NULL;
-	}
+
+        if (rate_limit) {
+                rd_ts_t now = rd_clock();
+                if (likely(rkq->rkq_qio->ts_last + rkq->rkq_qio->ts_rate > now))
+                        return;
+
+                rkq->rkq_qio->ts_last = now;
+        }
+
+        /* Ignore errors, not much to do anyway. */
+        if (rd_write(rkq->rkq_qio->fd, rkq->rkq_qio->payload,
+                     (int)rkq->rkq_qio->size) == -1)
+                ;
 }
 
 
@@ -315,9 +325,42 @@ static RD_INLINE RD_UNUSED
 int rd_kafka_op_cmp_prio (const void *_a, const void *_b) {
         const rd_kafka_op_t *a = _a, *b = _b;
 
-        return b->rko_prio - a->rko_prio;
+        return RD_CMP(b->rko_prio, a->rko_prio);
 }
 
+
+/**
+ * @brief Wake up waiters without enqueuing an op.
+ */
+static RD_INLINE RD_UNUSED void
+rd_kafka_q_yield (rd_kafka_q_t *rkq, rd_bool_t rate_limit) {
+        rd_kafka_q_t *fwdq;
+
+        mtx_lock(&rkq->rkq_lock);
+
+        rd_dassert(rkq->rkq_refcnt > 0);
+
+        if (unlikely(!(rkq->rkq_flags & RD_KAFKA_Q_F_READY))) {
+                /* Queue has been disabled */
+                mtx_unlock(&rkq->rkq_lock);
+                return;
+        }
+
+        if (!(fwdq = rd_kafka_q_fwd_get(rkq, 0))) {
+                rkq->rkq_flags |= RD_KAFKA_Q_F_YIELD;
+                cnd_signal(&rkq->rkq_cond);
+                if (rkq->rkq_qlen == 0)
+                        rd_kafka_q_io_event(rkq, rate_limit);
+
+                mtx_unlock(&rkq->rkq_lock);
+        } else {
+                mtx_unlock(&rkq->rkq_lock);
+                rd_kafka_q_yield(fwdq, rate_limit);
+                rd_kafka_q_destroy(fwdq);
+        }
+
+
+}
 
 /**
  * @brief Low-level unprotected enqueue that only performs
@@ -383,7 +426,7 @@ int rd_kafka_q_enq1 (rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
                 rd_kafka_q_enq0(rkq, rko, at_head);
                 cnd_signal(&rkq->rkq_cond);
                 if (rkq->rkq_qlen == 1)
-                        rd_kafka_q_io_event(rkq);
+                        rd_kafka_q_io_event(rkq, rd_false/*no rate-limiting*/);
 
                 if (do_lock)
                         mtx_unlock(&rkq->rkq_lock);
@@ -488,7 +531,7 @@ int rd_kafka_q_concat0 (rd_kafka_q_t *rkq, rd_kafka_q_t *srcq, int do_lock) {
 
 		TAILQ_CONCAT(&rkq->rkq_q, &srcq->rkq_q, rko_link);
 		if (rkq->rkq_qlen == 0)
-			rd_kafka_q_io_event(rkq);
+			rd_kafka_q_io_event(rkq, rd_false/*no rate-limiting*/);
                 rkq->rkq_qlen += srcq->rkq_qlen;
                 rkq->rkq_qsize += srcq->rkq_qsize;
 		cnd_signal(&rkq->rkq_cond);
@@ -529,7 +572,7 @@ void rd_kafka_q_prepend0 (rd_kafka_q_t *rkq, rd_kafka_q_t *srcq,
                 /* Move srcq to rkq */
                 TAILQ_MOVE(&rkq->rkq_q, &srcq->rkq_q, rko_link);
 		if (rkq->rkq_qlen == 0 && srcq->rkq_qlen > 0)
-			rd_kafka_q_io_event(rkq);
+			rd_kafka_q_io_event(rkq, rd_false/*no rate-limiting*/);
                 rkq->rkq_qlen += srcq->rkq_qlen;
                 rkq->rkq_qsize += srcq->rkq_qsize;
 
@@ -579,17 +622,28 @@ uint64_t rd_kafka_q_size (rd_kafka_q_t *rkq) {
         return sz;
 }
 
+/**
+ * @brief Construct a temporary on-stack replyq with increased
+ *        \p rkq refcount (unless NULL), version, and debug id.
+ */
+static RD_INLINE RD_UNUSED rd_kafka_replyq_t
+rd_kafka_replyq_make (rd_kafka_q_t *rkq, int version, const char *id) {
+        rd_kafka_replyq_t replyq = RD_ZERO_INIT;
+
+        if (rkq) {
+                replyq.q = rd_kafka_q_keep(rkq);
+                replyq.version = version;
+#if ENABLE_DEVEL
+                replyq._id = rd_strdup(id);
+#endif
+        }
+
+        return replyq;
+}
 
 /* Construct temporary on-stack replyq with increased Q refcount and
  * optional VERSION. */
-#if ENABLE_DEVEL
-#define RD_KAFKA_REPLYQ(Q,VERSION) \
-	(rd_kafka_replyq_t){rd_kafka_q_keep(Q), VERSION, \
-			rd_strdup(__FUNCTION__) }
-#else
-#define RD_KAFKA_REPLYQ(Q,VERSION) \
-	(rd_kafka_replyq_t){rd_kafka_q_keep(Q), VERSION}
-#endif
+#define RD_KAFKA_REPLYQ(Q,VERSION) rd_kafka_replyq_make(Q,VERSION,__FUNCTION__)
 
 /* Construct temporary on-stack replyq for indicating no replyq. */
 #if ENABLE_DEVEL
@@ -608,7 +662,7 @@ rd_kafka_set_replyq (rd_kafka_replyq_t *replyq,
 	replyq->q = rkq ? rd_kafka_q_keep(rkq) : NULL;
 	replyq->version = version;
 #if ENABLE_DEVEL
-	replyq->_id = strdup(__FUNCTION__);
+	replyq->_id = rd_strdup(__FUNCTION__);
 #endif
 }
 
@@ -713,12 +767,12 @@ rd_kafka_replyq_enq (rd_kafka_replyq_t *replyq, rd_kafka_op_t *rko,
 
 
 
-rd_kafka_op_t *rd_kafka_q_pop_serve (rd_kafka_q_t *rkq, int timeout_ms,
+rd_kafka_op_t *rd_kafka_q_pop_serve (rd_kafka_q_t *rkq, rd_ts_t timeout_us,
 				     int32_t version,
                                      rd_kafka_q_cb_type_t cb_type,
                                      rd_kafka_q_serve_cb_t *callback,
 				     void *opaque);
-rd_kafka_op_t *rd_kafka_q_pop (rd_kafka_q_t *rkq, int timeout_ms,
+rd_kafka_op_t *rd_kafka_q_pop (rd_kafka_q_t *rkq, rd_ts_t timeout_us,
                                int32_t version);
 int rd_kafka_q_serve (rd_kafka_q_t *rkq, int timeout_ms, int max_cnt,
                       rd_kafka_q_cb_type_t cb_type,
