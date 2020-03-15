@@ -1,5 +1,6 @@
-librdkafka (1.3.0-1) UNRELEASED; urgency=medium
+librdkafka (1.3.0-1) unstable; urgency=medium
 
+  [ Christian Barcenas ]
   * New upstream version 1.3.0
   * d/patches:
     * Port build scripts to Python 3 (Closes: #936911)
@@ -8,7 +9,7 @@ librdkafka (1.3.0-1) UNRELEASED; urgency=medium
   * d/copyright: License identifier 'MIT' -> 'Expat'
   * d/upstream: Add metadata
 
- -- Christian Barcenas <christian@cbarcenas.com>  Wed, 11 Mar 2020 01:21:42 -0700
+ -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Sun, 15 Mar 2020 23:12:33 +0800
 
 librdkafka (1.2.1-1) unstable; urgency=medium
 
