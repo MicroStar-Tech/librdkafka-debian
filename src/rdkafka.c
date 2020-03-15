@@ -90,11 +90,37 @@ int rd_kafka_thread_cnt (void) {
 }
 
 /**
- * Current thread's name (TLS)
+ * Current thread's log name (TLS)
  */
-char RD_TLS rd_kafka_thread_name[64] = "app";
+static char RD_TLS rd_kafka_thread_name[64] = "app";
 
+void rd_kafka_set_thread_name (const char *fmt, ...) {
+        va_list ap;
 
+        va_start(ap, fmt);
+        rd_vsnprintf(rd_kafka_thread_name, sizeof(rd_kafka_thread_name),
+                     fmt, ap);
+        va_end(ap);
+}
+
+/**
+ * @brief Current thread's system name (TLS)
+ *
+ * Note the name must be 15 characters or less, because it is passed to
+ * pthread_setname_np on Linux which imposes this limit.
+ */
+static char RD_TLS rd_kafka_thread_sysname[16] = "app";
+
+void rd_kafka_set_thread_sysname (const char *fmt, ...) {
+        va_list ap;
+
+        va_start(ap, fmt);
+        rd_vsnprintf(rd_kafka_thread_sysname, sizeof(rd_kafka_thread_sysname),
+                     fmt, ap);
+        va_end(ap);
+
+        thrd_setname(rd_kafka_thread_sysname);
+}
 
 static void rd_kafka_global_init (void) {
 #if ENABLE_SHAREDPTR_DEBUG
@@ -381,6 +407,12 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
                   "Local: Value deserialization error"),
         _ERR_DESC(RD_KAFKA_RESP_ERR__PARTIAL,
                   "Local: Partial response"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR__READ_ONLY,
+                  "Local: Read-only object"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR__NOENT,
+                  "Local: No such entry"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR__UNDERFLOW,
+                  "Local: Read underflow"),
 
 	_ERR_DESC(RD_KAFKA_RESP_ERR_UNKNOWN,
 		  "Unknown broker error"),
@@ -702,7 +734,10 @@ static void rd_kafka_destroy_app (rd_kafka_t *rk, int blocking) {
                      "Joining main background thread");
 
         if (thrd_join(thrd, NULL) != thrd_success)
-                rd_kafka_assert(NULL, !*"failed to join main thread");
+                rd_kafka_log(rk, LOG_ERR, "DESTROY",
+                             "Failed to join main thread: %s "
+                             "(was process forked?)",
+                             rd_strerror(errno));
 
         rd_kafka_destroy_final(rk);
 }
@@ -875,9 +910,9 @@ static RD_INLINE void rd_kafka_stats_emit_toppar (char **bufp, size_t *sizep,
 		   "\"desired\":%s, "
 		   "\"unknown\":%s, "
 		   "\"msgq_cnt\":%i, "
-		   "\"msgq_bytes\":%"PRIu64", "
+		   "\"msgq_bytes\":%"PRIusz", "
 		   "\"xmit_msgq_cnt\":%i, "
-		   "\"xmit_msgq_bytes\":%"PRIu64", "
+		   "\"xmit_msgq_bytes\":%"PRIusz", "
 		   "\"fetchq_cnt\":%i, "
 		   "\"fetchq_size\":%"PRIu64", "
 		   "\"fetch_state\":\"%s\", "
@@ -902,10 +937,11 @@ static RD_INLINE void rd_kafka_stats_emit_toppar (char **bufp, size_t *sizep,
                    leader_nodeid,
 		   (rktp->rktp_flags&RD_KAFKA_TOPPAR_F_DESIRED)?"true":"false",
 		   (rktp->rktp_flags&RD_KAFKA_TOPPAR_F_UNKNOWN)?"true":"false",
-		   rd_atomic32_get(&rktp->rktp_msgq.rkmq_msg_cnt),
-		   rd_atomic64_get(&rktp->rktp_msgq.rkmq_msg_bytes),
-		   rd_atomic32_get(&rktp->rktp_xmit_msgq.rkmq_msg_cnt),
-		   rd_atomic64_get(&rktp->rktp_xmit_msgq.rkmq_msg_bytes),
+                   rd_kafka_msgq_len(&rktp->rktp_msgq),
+		   rd_kafka_msgq_size(&rktp->rktp_msgq),
+                   /* FIXME: xmit_msgq is local to the broker thread. */
+                   0,
+                   (size_t)0,
 		   rd_kafka_q_len(rktp->rktp_fetchq),
 		   rd_kafka_q_size(rktp->rktp_fetchq),
 		   rd_kafka_fetch_states[rktp->rktp_fetch_state],
@@ -1197,7 +1233,8 @@ static int rd_kafka_thread_main (void *arg) {
 	rd_kafka_timer_t tmr_stats_emit = RD_ZERO_INIT;
 	rd_kafka_timer_t tmr_metadata_refresh = RD_ZERO_INIT;
 
-        rd_snprintf(rd_kafka_thread_name, sizeof(rd_kafka_thread_name), "main");
+        rd_kafka_set_thread_name("main");
+        rd_kafka_set_thread_sysname("rdk:main");
 
 	(void)rd_atomic32_add(&rd_kafka_thread_cnt_curr, 1);
 
@@ -1306,6 +1343,30 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
                         rd_kafka_conf_destroy(conf);
                 rd_kafka_set_last_error(RD_KAFKA_RESP_ERR__INVALID_ARG, EINVAL);
                 return NULL;
+        }
+
+#if WITH_SSL
+        if (conf->ssl.keystore_location && !conf->ssl.keystore_password) {
+                rd_snprintf(errstr, errstr_size,
+                            "Mandatory config property 'ssl.keystore.password' not set (mandatory because 'ssl.keystore.location' is set)");
+                if (!app_conf)
+                        rd_kafka_conf_destroy(conf);
+                rd_kafka_set_last_error(RD_KAFKA_RESP_ERR__INVALID_ARG, EINVAL);
+                return NULL;
+        }
+#endif
+
+        if (type == RD_KAFKA_CONSUMER) {
+                /* Automatically adjust `fetch.max.bytes` to be >=
+                 * `message.max.bytes`. */
+                conf->fetch_max_bytes = RD_MAX(conf->fetch_max_bytes,
+                                               conf->max_msg_size);
+
+                /* Automatically adjust 'receive.message.max.bytes' to
+                 * be 512 bytes larger than 'fetch.max.bytes' to have enough
+                 * room for protocol framing (including topic name). */
+                conf->recv_max_msg_size = RD_MAX(conf->recv_max_msg_size,
+                                                 conf->fetch_max_bytes + 512);
         }
 
         if (conf->metadata_max_age_ms == -1) {
@@ -2071,6 +2132,8 @@ rd_kafka_resp_err_t rd_kafka_consumer_close (rd_kafka_t *rk) {
         if (!(rkcg = rd_kafka_cgrp_get(rk)))
                 return RD_KAFKA_RESP_ERR__UNKNOWN_GROUP;
 
+        rd_kafka_dbg(rk, CONSUMER, "CLOSE", "Closing consumer");
+
 	/* Redirect cgrp queue to our temporary queue to make sure
 	 * all posted ops (e.g., rebalance callbacks) are served by
 	 * this function. */
@@ -2592,13 +2655,25 @@ rd_kafka_poll_cb (rd_kafka_t *rk, rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
 			rk->rk_conf.error_cb(rk, rko->rko_err,
 					     rko->rko_u.err.errstr,
                                              rk->rk_conf.opaque);
-		else
-			rd_kafka_log(rk, LOG_ERR, "ERROR",
-				     "%s: %s: %s",
-				     rk->rk_name,
-				     rd_kafka_err2str(rko->rko_err),
-				     rko->rko_u.err.errstr);
-		break;
+                else {
+                        /* If error string already contains
+                         * the err2str then skip including err2str in
+                         * the printout */
+                        if (rko->rko_u.err.errstr &&
+                            strstr(rko->rko_u.err.errstr,
+                                   rd_kafka_err2str(rko->rko_err)))
+                                rd_kafka_log(rk, LOG_ERR, "ERROR",
+                                             "%s: %s",
+                                             rk->rk_name,
+                                             rko->rko_u.err.errstr);
+                        else
+                                rd_kafka_log(rk, LOG_ERR, "ERROR",
+                                             "%s: %s: %s",
+                                             rk->rk_name,
+                                             rko->rko_u.err.errstr,
+                                             rd_kafka_err2str(rko->rko_err));
+                }
+                break;
 
 	case RD_KAFKA_OP_DR:
 		/* Delivery report:
@@ -2723,8 +2798,8 @@ static void rd_kafka_toppar_dump (FILE *fp, const char *indent,
 		"%s xmit_msgq: %i messages\n"
 		"%s total:     %"PRIu64" messages, %"PRIu64" bytes\n",
 		indent, rd_refcnt_get(&rktp->rktp_refcnt),
-		indent, rd_atomic32_get(&rktp->rktp_msgq.rkmq_msg_cnt),
-		indent, rd_atomic32_get(&rktp->rktp_xmit_msgq.rkmq_msg_cnt),
+		indent, rktp->rktp_msgq.rkmq_msg_cnt,
+		indent, rktp->rktp_xmit_msgq.rkmq_msg_cnt,
 		indent, rd_atomic64_get(&rktp->rktp_c.tx_msgs), rd_atomic64_get(&rktp->rktp_c.tx_bytes));
 }
 

@@ -26,7 +26,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
+#ifndef _RDKAFKA_QUEUE_H_
+#define _RDKAFKA_QUEUE_H_
 
 #include "rdkafka_op.h"
 #include "rdkafka_int.h"
@@ -35,6 +36,9 @@
 #include <io.h> /* for _write() */
 #endif
 
+/** @brief Queueing strategy */
+#define RD_KAFKA_QUEUE_FIFO   0
+#define RD_KAFKA_QUEUE_LIFO   1
 
 TAILQ_HEAD(rd_kafka_op_tailq, rd_kafka_op_s);
 
@@ -426,7 +430,6 @@ int rd_kafka_q_reenq (rd_kafka_q_t *rkq, rd_kafka_op_t *rko) {
  */
 static RD_INLINE RD_UNUSED
 void rd_kafka_q_deq0 (rd_kafka_q_t *rkq, rd_kafka_op_t *rko) {
-        rd_dassert(rkq->rkq_flags & RD_KAFKA_Q_F_READY);
 	rd_dassert(rkq->rkq_qlen > 0 &&
                    rkq->rkq_qsize >= (int64_t)rko->rko_len);
 
@@ -762,3 +765,5 @@ struct rd_kafka_queue_s {
 void rd_kafka_q_dump (FILE *fp, rd_kafka_q_t *rkq);
 
 extern int RD_TLS rd_kafka_yield_thread;
+
+#endif /* _RDKAFKA_QUEUE_H_ */
