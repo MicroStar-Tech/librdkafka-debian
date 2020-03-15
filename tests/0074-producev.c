@@ -1,7 +1,7 @@
 /*
- * librdkafka - Apache Kafka C/C++ library
+ * librdkafka - Apache Kafka C library
  *
- * Copyright (c) 2014 Magnus Edenhill
+ * Copyright (c) 2012-2015, Magnus Edenhill
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,46 +26,42 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <cerrno>
+#include "test.h"
+#include "rdkafka.h"
 
-#include "rdkafkacpp_int.h"
+/**
+ * @brief Simple producev() verification
+ */
 
-RdKafka::Queue::~Queue () {
+/**
+ * @brief Verify #1478: The internal shared rkt reference was not destroyed
+ *        when producev() failed.
+ */
 
+static void do_test_srkt_leak (void) {
+        rd_kafka_conf_t *conf;
+        char buf[2000];
+        rd_kafka_t *rk;
+        rd_kafka_resp_err_t err;
+
+        conf = rd_kafka_conf_new();
+        test_conf_set(conf, "message.max.bytes", "1000");
+
+        rk = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        err = rd_kafka_producev(rk,
+                                RD_KAFKA_V_TOPIC("test"),
+                                RD_KAFKA_V_VALUE(buf, sizeof(buf)),
+                                RD_KAFKA_V_END);
+        TEST_ASSERT(err == RD_KAFKA_RESP_ERR_MSG_SIZE_TOO_LARGE,
+                    "expected MSG_SIZE_TOO_LARGE, not %s",
+                    rd_kafka_err2str(err));
+
+        rd_kafka_destroy(rk);
 }
 
-RdKafka::Queue *RdKafka::Queue::create (Handle *base) {
-  RdKafka::QueueImpl *queueimpl = new RdKafka::QueueImpl;
-  queueimpl->queue_ = rd_kafka_queue_new(dynamic_cast<HandleImpl*>(base)->rk_);
-  return queueimpl;
-}
 
-RdKafka::ErrorCode
-RdKafka::QueueImpl::forward (Queue *queue) {
-  if (!queue) {
-    rd_kafka_queue_forward(queue_, NULL);
-  } else {
-    QueueImpl *queueimpl = dynamic_cast<QueueImpl *>(queue);
-    rd_kafka_queue_forward(queue_, queueimpl->queue_);
-  }
-  return RdKafka::ERR_NO_ERROR;
-}
-
-RdKafka::Message *RdKafka::QueueImpl::consume (int timeout_ms) {
-  rd_kafka_message_t *rkmessage;
-  rkmessage = rd_kafka_consume_queue(queue_, timeout_ms);
-
-  if (!rkmessage)
-    return new RdKafka::MessageImpl(NULL, RdKafka::ERR__TIMED_OUT);
-
-  return new RdKafka::MessageImpl(rkmessage);
-}
-
-int RdKafka::QueueImpl::poll (int timeout_ms) {
-        return rd_kafka_queue_poll_callback(queue_, timeout_ms);
-}
-
-void RdKafka::QueueImpl::io_event_enable (int fd, const void *payload,
-                                          size_t size) {
-        rd_kafka_queue_io_event_enable(queue_, fd, payload, size);
+int main_0074_producev (int argc, char **argv) {
+        do_test_srkt_leak();
+        return 0;
 }
