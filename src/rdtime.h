@@ -74,7 +74,12 @@ static RD_INLINE rd_ts_t rd_clock (void) {
 	gettimeofday(&tv, NULL);
 	return ((rd_ts_t)tv.tv_sec * 1000000LLU) + (rd_ts_t)tv.tv_usec;
 #elif defined(_MSC_VER)
-	return (rd_ts_t)GetTickCount64() * 1000LLU;
+        LARGE_INTEGER now;
+        static RD_TLS LARGE_INTEGER freq;
+        if (!freq.QuadPart)
+                QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&now);
+        return (now.QuadPart * 1000000) / freq.QuadPart;
 #else
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -134,6 +139,23 @@ static RD_INLINE rd_ts_t rd_timeout_init (int timeout_ms) {
 
 
 /**
+ * @brief Same as rd_timeout_remains() but with microsecond precision
+ */
+static RD_INLINE rd_ts_t rd_timeout_remains_us (rd_ts_t abs_timeout) {
+        rd_ts_t timeout_us;
+
+        if (abs_timeout == RD_POLL_INFINITE ||
+            abs_timeout == RD_POLL_NOWAIT)
+                return (rd_ts_t)abs_timeout;
+
+        timeout_us = abs_timeout - rd_clock();
+        if (timeout_us <= 0)
+                return RD_POLL_NOWAIT;
+        else
+                return timeout_us;
+}
+
+/**
  * @returns the remaining timeout for timeout \p abs_timeout previously set
  *          up by rd_timeout_init()
  *
@@ -146,17 +168,13 @@ static RD_INLINE rd_ts_t rd_timeout_init (int timeout_ms) {
  *         in a bool fashion.
  */
 static RD_INLINE int rd_timeout_remains (rd_ts_t abs_timeout) {
-	int timeout_ms;
+        rd_ts_t timeout_us = rd_timeout_remains_us(abs_timeout);
 
-	if (abs_timeout == RD_POLL_INFINITE ||
-	    abs_timeout == RD_POLL_NOWAIT)
-		return (int)abs_timeout;
+        if (timeout_us == RD_POLL_INFINITE ||
+            timeout_us == RD_POLL_NOWAIT)
+                return (int)timeout_us;
 
-	timeout_ms = (int)((abs_timeout - rd_clock()) / 1000);
-	if (timeout_ms <= 0)
-		return RD_POLL_NOWAIT;
-	else
-		return timeout_ms;
+        return (int)(timeout_us / 1000);
 }
 
 /**

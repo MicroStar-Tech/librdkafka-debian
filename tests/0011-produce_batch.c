@@ -80,7 +80,7 @@ static void test_single_partition (void) {
         rd_kafka_conf_t *conf;
         rd_kafka_topic_conf_t *topic_conf;
         char msg[128];
-        int msgcnt = 100000;
+        int msgcnt = test_on_ci ? 1000 : 100000;
         int failcnt = 0;
         int i;
         rd_kafka_message_t *rkmessages;
@@ -200,7 +200,7 @@ static void test_partitioner (void) {
         rd_kafka_conf_t *conf;
         rd_kafka_topic_conf_t *topic_conf;
         char msg[128];
-        int msgcnt = 100000;
+        int msgcnt = test_on_ci ? 1000 : 100000;
         int failcnt = 0;
         int i;
         rd_kafka_message_t *rkmessages;
@@ -545,6 +545,7 @@ int main_0011_produce_batch (int argc, char **argv) {
         test_message_partitioner_wo_per_message_flag();
         test_single_partition();
         test_partitioner();
-        test_per_message_partition_flag();
+        if (test_can_create_topics(1))
+                test_per_message_partition_flag();
         return 0;
 }
