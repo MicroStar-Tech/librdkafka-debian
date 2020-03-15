@@ -17,6 +17,8 @@ For an introduction to the performance and usage of librdkafka, see
 [INTRODUCTION.md](https://github.com/edenhill/librdkafka/blob/master/INTRODUCTION.md)
 
 
+**NOTE**: A C++ interface is currently in testing, see the `c++` branch.
+
 
 **Apache Kafka 0.8 support:**
 
@@ -24,12 +26,12 @@ For an introduction to the performance and usage of librdkafka, see
   * Producer: supported
   * Consumer: supported
   * Compression: snappy and gzip
-  * Debian package: work in progress (separate "debian" branch)
+  * Debian package: librdkafka1 and librdkafka-dev in Debian testing and unstable
   * ZooKeeper: not supported
-  * API: not backwards compatible
+  * API: Stable, not backwards compatible
   * Tests: Regression tests in `tests/` directory.
   * Statistics: JSON formatted, see `rd_kafka_conf_set_stats_cb` in `rdkafka.h`.
-  * Status: Testing, APIs subject to change.
+  * Status: Stable
 
 
 **Apache Kafka 0.7 support:**
@@ -61,6 +63,8 @@ For an introduction to the performance and usage of librdkafka, see
   * [redBorder](http://www.redborder.net)
   * [Headweb](http://www.headweb.com/)
   * [node-kafka](https://github.com/sutoiku/node-kafka)
+  * [Produban's log2kafka](https://github.com/Produban/log2kafka)
+  * [phpkafka](https://github.com/salebab/phpkafka)
   * *Let [me](mailto:rdkafka@edenhill.se) know if you are using librdkafka*
 
 
@@ -117,10 +121,10 @@ File bug reports, feature requests and questions using
 [GitHub Issues](https://github.com/edenhill/librdkafka/issues)
 
 
-Questions and discussions are also welcome on irc.freenode.org, #kafka,
+Questions and discussions are also welcome on irc.freenode.org, #apache-kafka,
 nickname Snaps.
 
 
-### Commerical support
+### Commercial support
 
 Commercial support is available from [Edenhill services](http://www.edenhill.se)

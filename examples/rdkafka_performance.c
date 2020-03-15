@@ -87,7 +87,6 @@ static void msg_delivered (rd_kafka_t *rk,
 			   void *payload, size_t len,
 			   int error_code,
 			   void *opaque, void *msg_opaque) {
-	long int msgid = (long int)msg_opaque;
 	static rd_ts_t last;
 	rd_ts_t now = rd_clock();
 	static int msgs;
@@ -106,12 +105,12 @@ static void msg_delivered (rd_kafka_t *rk,
 	    !(msgs_wait_cnt % (dispintvl / 1000)) || 
 	    (now - last) >= dispintvl * 1000) {
 		if (error_code)
-			printf("Message %ld delivey failed: %s (%li remain)\n",
-			       msgid, rd_kafka_err2str(error_code),
+			printf("Message delivery failed: %s (%li remain)\n",
+			       rd_kafka_err2str(error_code),
 			       msgs_wait_cnt);
 		else if (!quiet)
-			printf("Message %ld delivered: %li remain\n",
-			       msgid, msgs_wait_cnt);
+			printf("Message delivered: %li remain\n",
+			       msgs_wait_cnt);
 		if (!quiet && do_seq)
 			printf(" --> \"%.*s\"\n", (int)len, (char *)payload);
 		last = now;
@@ -238,6 +237,7 @@ int main (int argc, char **argv) {
 	const char *compression = "no";
 	int64_t start_offset = 0;
 	int batch_size = 0;
+	int idle = 0;
 
 	/* Kafka configuration */
 	conf = rd_kafka_conf_new();
@@ -269,7 +269,7 @@ int main (int argc, char **argv) {
 
 	while ((opt =
 		getopt(argc, argv,
-		       "PCt:p:b:s:k:c:fi:Dd:m:S:x:R:a:z:o:X:B:eT:q")) != -1) {
+		       "PCt:p:b:s:k:c:fi:Dd:m:S:x:R:a:z:o:X:B:eT:qI")) != -1) {
 		switch (opt) {
 		case 'P':
 		case 'C':
@@ -336,7 +336,14 @@ int main (int argc, char **argv) {
 			compression = optarg;
 			break;
 		case 'o':
-			start_offset = strtoll(optarg, NULL, 10);
+			if (!strcmp(optarg, "end"))
+				start_offset = RD_KAFKA_OFFSET_END;
+			else if (!strcmp(optarg, "beginning"))
+				start_offset = RD_KAFKA_OFFSET_BEGINNING;
+			else if (!strcmp(optarg, "stored"))
+				start_offset = RD_KAFKA_OFFSET_STORED;
+			else
+				start_offset = strtoll(optarg, NULL, 10);
 			break;
 		case 'e':
 			exit_eof = 1;
@@ -372,7 +379,7 @@ int main (int argc, char **argv) {
 			if (!strncmp(name, "topic.", strlen("topic.")))
 				res = rd_kafka_topic_conf_set(topic_conf,
 							      name+
-							      strlen("topic"),
+							      strlen("topic."),
 							      val,
 							      errstr,
 							      sizeof(errstr));
@@ -402,6 +409,10 @@ int main (int argc, char **argv) {
 			quiet = 1;
 			break;
 
+		case 'I':
+			idle = 1;
+			break;
+
 		default:
 			goto usage;
 		}
@@ -412,6 +423,8 @@ int main (int argc, char **argv) {
 		fprintf(stderr,
 			"Usage: %s [-C|-P] -t <topic> "
 			"[-p <partition>] [-b <broker,broker..>] [options..]\n"
+			"\n"
+			"librdkafka version %s (0x%08x)\n"
 			"\n"
 			" Options:\n"
 			"  -C | -P      Consumer or Producer mode\n"
@@ -444,6 +457,7 @@ int main (int argc, char **argv) {
 			"  -T <intvl>   Enable statistics from librdkafka at "
 			"specified interval (ms)\n"
 			"  -q           Be more quiet\n"
+			"  -I           Idle: dont produce any messages\n"
 			"\n"
 			" In Consumer mode:\n"
 			"  consumes messages and prints thruput\n"
@@ -454,6 +468,7 @@ int main (int argc, char **argv) {
 			"  writes messages of size -s <..> and prints thruput\n"
 			"\n",
 			argv[0],
+			rd_kafka_version_str(), rd_kafka_version(),
 			RD_KAFKA_DEBUG_CONTEXTS);
 		exit(1);
 	}
@@ -475,10 +490,6 @@ int main (int argc, char **argv) {
 		exit(1);
 	}
 
-	/* Socket hangups are gracefully handled in librdkafka on socket error
-	 * without the use of signals, so SIGPIPE should be ignored by the
-	 * calling program. */
-	signal(SIGPIPE, SIG_IGN);
 
 	if (msgcnt != -1)
 		forever = 0;
@@ -544,6 +555,11 @@ int main (int argc, char **argv) {
 		while (run && (msgcnt == -1 || cnt.msgs < msgcnt)) {
 			/* Send/Produce message. */
 
+			if (idle) {
+				rd_kafka_poll(rk, 1000);
+				continue;
+			}
+
 			if (do_seq) {
 				snprintf(sbuf, msgsize-1, "%"PRIu64": ", seq);
 				seq++;
@@ -560,14 +576,23 @@ int main (int argc, char **argv) {
 			while (run &&
 			       rd_kafka_produce(rkt, partition,
 						sendflags, pbuf, msgsize,
-						key, keylen,
-						(void *)cnt.msgs) == -1) {
-				if (!quiet || errno != ENOBUFS)
+						key, keylen, NULL) == -1) {
+				if (errno == ESRCH)
+					printf("No such partition: %"PRId32"\n",
+					       partition);
+				else if (!quiet || errno != ENOBUFS)
 					printf("produce error: %s%s\n",
-					       strerror(errno),
+					       rd_kafka_err2str(
+						       rd_kafka_errno2err(
+							       errno)),
 					       errno == ENOBUFS ?
 					       " (backpressure)":"");
+				msgs_failed++;
 				cnt.tx_err++;
+				if (errno != ENOBUFS) {
+					run = 0;
+					break;
+				}
 				now = rd_clock();
 				if (cnt.t_last + dispintvl <= now) {
 					printf("%% Backpressure %i "
@@ -596,7 +621,8 @@ int main (int argc, char **argv) {
 		printf("All messages produced, "
 		       "now waiting for %li deliveries\n",
 		       msgs_wait_cnt);
-		rd_kafka_dump(stdout, rk);
+		if (debug)
+			rd_kafka_dump(stdout, rk);
 
 		/* Wait for messages to be delivered */
 		i = 0;
@@ -623,7 +649,8 @@ int main (int argc, char **argv) {
 			       cnt.tx_err, cnt.tx,
 			       ((double)cnt.tx_err / (double)cnt.tx) * 100.0);
 
-		rd_kafka_dump(stdout, rk);
+		if (debug)
+			rd_kafka_dump(stdout, rk);
 
 		/* Destroy the handle */
 		rd_kafka_destroy(rk);
@@ -633,7 +660,7 @@ int main (int argc, char **argv) {
 		 * Consumer
 		 */
 
-		rd_kafka_message_t **rkmessages;
+		rd_kafka_message_t **rkmessages = NULL;
 
 #if 0 /* Future API */
 		/* The offset storage file is optional but its presence
@@ -656,7 +683,7 @@ int main (int argc, char **argv) {
 		if (!(rk = rd_kafka_new(RD_KAFKA_CONSUMER, conf,
 					errstr, sizeof(errstr)))) {
 			fprintf(stderr,
-				"%% Failed to create Kafka producer: %s\n",
+				"%% Failed to create Kafka consumer: %s\n",
 				errstr);
 			exit(1);
 		}
@@ -680,7 +707,7 @@ int main (int argc, char **argv) {
 		/* Start consuming */
 		if (rd_kafka_consume_start(rkt, partition, start_offset) == -1){
 			fprintf(stderr, "%% Failed to start consuming: %s\n",
-				strerror(errno));
+				rd_kafka_err2str(rd_kafka_errno2err(errno)));
 			exit(1);
 		}
 		
@@ -722,9 +749,13 @@ int main (int argc, char **argv) {
 			
 			if (r == -1)
 				fprintf(stderr, "%% Error: %s\n",
-					strerror(errno));
+					rd_kafka_err2str(
+						rd_kafka_errno2err(errno)));
 
 			print_stats(mode, 0, compression);
+
+			/* Poll to handle stats callbacks */
+			rd_kafka_poll(rk, 0);
 		}
 		cnt.t_end = rd_clock();
 
