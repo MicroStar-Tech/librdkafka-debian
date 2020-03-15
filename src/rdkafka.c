@@ -238,8 +238,7 @@ static void rd_kafka_log_buf (const rd_kafka_conf_t *conf,
                 rko = rd_kafka_op_new(RD_KAFKA_OP_LOG);
                 rd_kafka_op_set_prio(rko, RD_KAFKA_PRIO_MEDIUM);
                 rko->rko_u.log.level = level;
-                strncpy(rko->rko_u.log.fac, fac,
-                        sizeof(rko->rko_u.log.fac) - 1);
+                rd_strlcpy(rko->rko_u.log.fac, fac, sizeof(rko->rko_u.log.fac));
                 rko->rko_u.log.str = rd_strdup(buf);
                 rd_kafka_q_enq(rk->rk_logq, rko);
 
@@ -475,6 +474,8 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
         _ERR_DESC(RD_KAFKA_RESP_ERR__MAX_POLL_EXCEEDED,
                   "Local: Maximum application poll interval "
                   "(max.poll.interval.ms) exceeded"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR__UNKNOWN_BROKER,
+                  "Local: Unknown broker"),
 
 	_ERR_DESC(RD_KAFKA_RESP_ERR_UNKNOWN,
 		  "Unknown broker error"),
@@ -506,12 +507,12 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
 		  "Broker: Offset metadata string too large"),
 	_ERR_DESC(RD_KAFKA_RESP_ERR_NETWORK_EXCEPTION,
 		  "Broker: Broker disconnected before response received"),
-        _ERR_DESC(RD_KAFKA_RESP_ERR_GROUP_LOAD_IN_PROGRESS,
-		  "Broker: Group coordinator load in progress"),
-        _ERR_DESC(RD_KAFKA_RESP_ERR_GROUP_COORDINATOR_NOT_AVAILABLE,
-		  "Broker: Group coordinator not available"),
-        _ERR_DESC(RD_KAFKA_RESP_ERR_NOT_COORDINATOR_FOR_GROUP,
-		  "Broker: Not coordinator for group"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS,
+		  "Broker: Coordinator load in progress"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE,
+		  "Broker: Coordinator not available"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_NOT_COORDINATOR,
+		  "Broker: Not coordinator"),
         _ERR_DESC(RD_KAFKA_RESP_ERR_TOPIC_EXCEPTION,
 		  "Broker: Invalid topic"),
         _ERR_DESC(RD_KAFKA_RESP_ERR_RECORD_LIST_TOO_LARGE,
@@ -1148,6 +1149,10 @@ static void rd_kafka_destroy_internal (rd_kafka_t *rk) {
         }
 
         rd_list_destroy(&wait_thrds);
+
+        /* Destroy mock cluster */
+        if (rk->rk_mock.cluster)
+                rd_kafka_mock_cluster_destroy(rk->rk_mock.cluster);
 }
 
 /**
@@ -1243,14 +1248,14 @@ static RD_INLINE void rd_kafka_stats_emit_toppar (struct _stats_emit *st,
         int64_t end_offset;
         int64_t consumer_lag = -1;
         struct offset_stats offs;
-        int32_t leader_nodeid = -1;
+        int32_t broker_id = -1;
 
         rd_kafka_toppar_lock(rktp);
 
-        if (rktp->rktp_leader) {
-                rd_kafka_broker_lock(rktp->rktp_leader);
-                leader_nodeid = rktp->rktp_leader->rkb_nodeid;
-                rd_kafka_broker_unlock(rktp->rktp_leader);
+        if (rktp->rktp_broker) {
+                rd_kafka_broker_lock(rktp->rktp_broker);
+                broker_id = rktp->rktp_broker->rkb_nodeid;
+                rd_kafka_broker_unlock(rktp->rktp_broker);
         }
 
         /* Grab a copy of the latest finalized offset stats */
@@ -1278,6 +1283,7 @@ static RD_INLINE void rd_kafka_stats_emit_toppar (struct _stats_emit *st,
 
 	_st_printf("%s\"%"PRId32"\": { "
 		   "\"partition\":%"PRId32", "
+		   "\"broker\":%"PRId32", "
 		   "\"leader\":%"PRId32", "
 		   "\"desired\":%s, "
 		   "\"unknown\":%s, "
@@ -1313,7 +1319,8 @@ static RD_INLINE void rd_kafka_stats_emit_toppar (struct _stats_emit *st,
 		   first ? "" : ", ",
 		   rktp->rktp_partition,
 		   rktp->rktp_partition,
-                   leader_nodeid,
+                   broker_id,
+                   rktp->rktp_leader_id,
 		   (rktp->rktp_flags&RD_KAFKA_TOPPAR_F_DESIRED)?"true":"false",
 		   (rktp->rktp_flags&RD_KAFKA_TOPPAR_F_UNKNOWN)?"true":"false",
                    rd_kafka_msgq_len(&rktp->rktp_msgq),
@@ -1369,7 +1376,7 @@ static void rd_kafka_stats_emit_broker_reqs (struct _stats_emit *st,
                         [RD_KAFKAP_Fetch] = rd_true,
                         [RD_KAFKAP_OffsetCommit] = rd_true,
                         [RD_KAFKAP_OffsetFetch] = rd_true,
-                        [RD_KAFKAP_GroupCoordinator] = rd_true,
+                        [RD_KAFKAP_FindCoordinator] = rd_true,
                         [RD_KAFKAP_JoinGroup] = rd_true,
                         [RD_KAFKAP_Heartbeat] = rd_true,
                         [RD_KAFKAP_LeaveGroup] = rd_true,
@@ -2071,6 +2078,33 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
                 ret_errno = EINVAL;
                 goto fail;
         }
+
+        /* Create Mock cluster */
+        if (rk->rk_conf.mock.broker_cnt > 0) {
+                rk->rk_mock.cluster = rd_kafka_mock_cluster_new(
+                        rk, rk->rk_conf.mock.broker_cnt);
+
+                if (!rk->rk_mock.cluster) {
+                        rd_snprintf(errstr, errstr_size,
+                                    "Failed to create mock cluster, see logs");
+                        ret_err = RD_KAFKA_RESP_ERR__FAIL;
+                        ret_errno = EINVAL;
+                        goto fail;
+                }
+
+                rd_kafka_log(rk, LOG_NOTICE, "MOCK", "Mock cluster enabled: "
+                             "original bootstrap.servers ignored and replaced");
+
+                /* Overwrite bootstrap.servers and connection settings */
+                if (rd_kafka_conf_set(&rk->rk_conf, "bootstrap.servers",
+                                      rd_kafka_mock_cluster_bootstraps(
+                                              rk->rk_mock.cluster),
+                                      NULL, 0) != RD_KAFKA_CONF_OK)
+                        rd_assert(!"failed to replace mock bootstrap.servers");
+
+                rk->rk_conf.security_protocol = RD_KAFKA_PROTO_PLAINTEXT;
+        }
+
 
         if (rk->rk_conf.security_protocol == RD_KAFKA_PROTO_SASL_SSL ||
             rk->rk_conf.security_protocol == RD_KAFKA_PROTO_SASL_PLAINTEXT) {
@@ -3565,12 +3599,15 @@ int rd_kafka_queue_poll_callback (rd_kafka_queue_t *rkqu, int timeout_ms) {
 static void rd_kafka_toppar_dump (FILE *fp, const char *indent,
 				  rd_kafka_toppar_t *rktp) {
 
-	fprintf(fp, "%s%.*s [%"PRId32"] leader %s\n",
+	fprintf(fp, "%s%.*s [%"PRId32"] broker %s, "
+                "leader_id %s\n",
 		indent,
 		RD_KAFKAP_STR_PR(rktp->rktp_rkt->rkt_topic),
 		rktp->rktp_partition,
-		rktp->rktp_leader ?
-		rktp->rktp_leader->rkb_name : "none");
+		rktp->rktp_broker ?
+		rktp->rktp_broker->rkb_name : "none",
+                rktp->rktp_leader ?
+                rktp->rktp_leader->rkb_name : "none");
 	fprintf(fp,
 		"%s refcnt %i\n"
 		"%s msgq:      %i messages\n"
@@ -4157,7 +4194,7 @@ static void rd_kafka_ListGroups_resp_cb (rd_kafka_t *rk,
         struct list_groups_state *state;
         const int log_decode_errors = LOG_ERR;
         int16_t ErrorCode;
-        char **grps;
+        char **grps = NULL;
         int cnt, grpcnt, i = 0;
 
         if (err == RD_KAFKA_RESP_ERR__DESTROY) {
@@ -4228,6 +4265,8 @@ err:
         return;
 
  err_parse:
+        if (grps)
+                rd_free(grps);
         state->err = reply->rkbuf_err;
 }
 
@@ -4271,17 +4310,14 @@ rd_kafka_list_groups (rd_kafka_t *rk, const char *group,
                         rd_kafka_broker_unlock(rkb);
                         continue;
                 }
-
-                state.wait_cnt++;
-                rd_kafka_ListGroupsRequest(rkb,
-                                           RD_KAFKA_REPLYQ(state.q, 0),
-					   rd_kafka_ListGroups_resp_cb,
-                                           &state);
-
-                rkb_cnt++;
-
                 rd_kafka_broker_unlock(rkb);
 
+                state.wait_cnt++;
+                rkb_cnt++;
+                rd_kafka_ListGroupsRequest(rkb,
+                                           RD_KAFKA_REPLYQ(state.q, 0),
+                                           rd_kafka_ListGroups_resp_cb,
+                                           &state);
         }
         rd_kafka_rdunlock(rk);
 
