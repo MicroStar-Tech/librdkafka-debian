@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+
 /* Typical include path would be <librdkafka/rdkafka.h>, but this program
  * is built from within the librdkafka source tree and thus differs. */
 #include "rdkafka.h"
@@ -85,6 +86,7 @@ static const char *test_states[] = {
 /**
  * Declare all tests here
  */
+_TEST_DECL(0000_unittests);
 _TEST_DECL(0001_multiobj);
 _TEST_DECL(0002_unkpart);
 _TEST_DECL(0003_msgmaxsize);
@@ -139,9 +141,15 @@ _TEST_DECL(0055_producer_latency);
 _TEST_DECL(0056_balanced_group_mt);
 _TEST_DECL(0057_invalid_topic);
 _TEST_DECL(0058_log);
+_TEST_DECL(0059_bsearch);
 _TEST_DECL(0060_op_prio);
 _TEST_DECL(0061_consumer_lag);
-
+_TEST_DECL(0062_stats_event);
+_TEST_DECL(0063_clusterid);
+_TEST_DECL(0064_interceptors);
+_TEST_DECL(0065_yield);
+_TEST_DECL(0066_plugins);
+_TEST_DECL(0067_empty_topic);
 
 /**
  * Define all tests here
@@ -149,6 +157,7 @@ _TEST_DECL(0061_consumer_lag);
 struct test tests[] = {
         /* Special MAIN test to hold over-all timings, etc. */
         { .name = "<MAIN>", .flags = TEST_F_LOCAL },
+        _TEST(0000_unittests, TEST_F_LOCAL),
         _TEST(0001_multiobj, 0),
         _TEST(0002_unkpart, 0),
         _TEST(0003_msgmaxsize, 0),
@@ -208,8 +217,17 @@ struct test tests[] = {
         _TEST(0056_balanced_group_mt, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0057_invalid_topic, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0058_log, TEST_F_LOCAL),
+        _TEST(0059_bsearch, 0, TEST_BRKVER(0,10,0,0)),
         _TEST(0060_op_prio, 0, TEST_BRKVER(0,9,0,0)),
         _TEST(0061_consumer_lag, 0),
+        _TEST(0062_stats_event, TEST_F_LOCAL),
+        _TEST(0063_clusterid, 0, TEST_BRKVER(0,10,0,0)),
+        _TEST(0064_interceptors, 0),
+        _TEST(0065_yield, 0),
+        _TEST(0066_plugins,
+              TEST_F_LOCAL|TEST_F_KNOWN_ISSUE_WIN32|TEST_F_KNOWN_ISSUE_OSX,
+              .extra = "dynamic loading of tests might not be fixed for this platform"),
+        _TEST(0067_empty_topic, 0),
         { NULL }
 };
 
@@ -334,6 +352,25 @@ void test_timeout_set (int timeout) {
 }
 
 
+#ifdef _MSC_VER
+static void test_init_win32 (void) {
+        /* Enable VT emulation to support colored output. */
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD dwMode = 0;
+
+        if (hOut == INVALID_HANDLE_VALUE ||
+            !GetConsoleMode(hOut, &dwMode))
+                return;
+
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x4
+#endif
+        dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(hOut, dwMode);
+}
+#endif
+
+
 static void test_init (void) {
         int seed;
         const char *tmp;
@@ -353,6 +390,7 @@ static void test_init (void) {
         else
                 seed = test_clock() & 0xffffffff;
 #ifdef _MSC_VER
+        test_init_win32();
 	{
 		LARGE_INTEGER cycl;
 		QueryPerformanceCounter(&cycl);
@@ -504,8 +542,15 @@ const char *test_getenv (const char *env, const char *def) {
         tmp = getenv(env);
         if (tmp && *tmp)
                 return tmp;
-#endif
         return def;
+#else
+        static RD_TLS char tmp[512];
+        DWORD r;
+        r = GetEnvironmentVariableA(env, tmp, sizeof(tmp));
+        if (r == 0 || r > sizeof(tmp))
+                return def;
+        return tmp;
+#endif
 }
 
 void test_conf_common_init (rd_kafka_conf_t *conf, int timeout) {
@@ -578,19 +623,17 @@ void test_wait_exit (int timeout) {
 
 	TEST_SAY("%i thread(s) in use by librdkafka\n", r);
 
-	if (r > 0) {
-		TEST_FAIL_LATER("%i thread(s) still active in librdkafka", r);
-	}
+        if (r > 0)
+                TEST_FAIL("%i thread(s) still active in librdkafka", r);
 
         timeout -= (int)(time(NULL) - start);
         if (timeout > 0) {
 		TEST_SAY("Waiting %d seconds for all librdkafka memory "
 			 "to be released\n", timeout);
                 if (rd_kafka_wait_destroyed(timeout * 1000) == -1)
-			TEST_FAIL_LATER("Not all internal librdkafka "
-					"objects destroyed\n");
+                        TEST_FAIL("Not all internal librdkafka "
+                                  "objects destroyed\n");
 	}
-
 }
 
 
@@ -874,8 +917,10 @@ static void run_tests (const char *tests_to_run,
                 if (!skip_reason) {
                         run_test(test, argc, argv);
                 } else {
-                        TEST_SAY("================= Skipping test %s (%s)"
-                                 "================\n", test->name, skip_reason);
+                        TEST_SAYL(3,
+                                  "================= Skipping test %s (%s)"
+                                  "================\n",
+                                  test->name, skip_reason);
                         TEST_LOCK();
                         test->state = TEST_SKIPPED;
                         TEST_UNLOCK();
@@ -1011,7 +1056,7 @@ static int test_summary (int do_lock) {
                         break;
                 }
 
-		if (show_summary)
+		if (show_summary && test->state != TEST_SKIPPED)
 			printf("|%s %-40s | %10s | %7.3fs %s|%s\n",
 			       color,
 			       test->name, test_states[test->state],
@@ -1394,7 +1439,7 @@ rd_kafka_topic_t *test_create_topic_object (rd_kafka_t *rk,
 	rkt = rd_kafka_topic_new(rk, topic, topic_conf);
 	if (!rkt)
 		TEST_FAIL("Failed to create topic: %s\n",
-                          rd_kafka_err2str(rd_kafka_errno2err(errno)));
+                          rd_kafka_err2str(rd_kafka_last_error()));
 
 	return rkt;
 
@@ -1429,7 +1474,7 @@ rd_kafka_topic_t *test_create_producer_topic (rd_kafka_t *rk,
 	rkt = rd_kafka_topic_new(rk, topic, topic_conf);
 	if (!rkt)
 		TEST_FAIL("Failed to create topic: %s\n",
-                          rd_kafka_err2str(rd_kafka_errno2err(errno)));
+                          rd_kafka_err2str(rd_kafka_last_error()));
 
 	return rkt;
 
@@ -1490,7 +1535,7 @@ void test_produce_msgs_nowait (rd_kafka_t *rk, rd_kafka_topic_t *rkt,
 			TEST_FAIL("Failed to produce message %i "
 				  "to partition %i: %s",
 				  msg_id, (int)partition,
-				  rd_kafka_err2str(rd_kafka_errno2err(errno)));
+                                  rd_kafka_err2str(rd_kafka_last_error()));
 
                 (*msgcounterp)++;
 		tot_bytes += size;
@@ -1632,7 +1677,7 @@ rd_kafka_topic_t *test_create_consumer_topic (rd_kafka_t *rk,
 	rkt = rd_kafka_topic_new(rk, topic, topic_conf);
 	if (!rkt)
 		TEST_FAIL("Failed to create topic: %s\n",
-                          rd_kafka_err2str(rd_kafka_errno2err(errno)));
+                          rd_kafka_err2str(rd_kafka_last_error()));
 
 	return rkt;
 }
@@ -1647,7 +1692,7 @@ void test_consumer_start (const char *what,
 
 	if (rd_kafka_consume_start(rkt, partition, start_offset) == -1)
 		TEST_FAIL("%s: consume_start failed: %s\n",
-			  what, rd_kafka_err2str(rd_kafka_errno2err(errno)));
+			  what, rd_kafka_err2str(rd_kafka_last_error()));
 }
 
 void test_consumer_stop (const char *what,
@@ -1658,7 +1703,7 @@ void test_consumer_stop (const char *what,
 
 	if (rd_kafka_consume_stop(rkt, partition) == -1)
 		TEST_FAIL("%s: consume_stop failed: %s\n",
-			  what, rd_kafka_err2str(rd_kafka_errno2err(errno)));
+			  what, rd_kafka_err2str(rd_kafka_last_error()));
 }
 
 void test_consumer_seek (const char *what, rd_kafka_topic_t *rkt,
@@ -1717,7 +1762,8 @@ int64_t test_consume_msgs (const char *what, rd_kafka_topic_t *rkt,
 		rd_kafka_message_t *rkmessage;
 		int msg_id;
 
-		rkmessage = rd_kafka_consume(rkt, partition, 5000);
+                rkmessage = rd_kafka_consume(rkt, partition,
+                                             tmout_multip(5000));
 
 		if (TIMING_EVERY(&t_all, 3*1000000))
 			TEST_SAY("%s: "
@@ -2793,13 +2839,34 @@ void test_conf_set (rd_kafka_conf_t *conf, const char *name, const char *val) {
                           name, val, errstr);
 }
 
-char *test_conf_get (rd_kafka_conf_t *conf, const char *name) {
-	static char ret[256];
+char *test_conf_get (const rd_kafka_conf_t *conf, const char *name) {
+	static RD_TLS char ret[256];
 	size_t ret_sz = sizeof(ret);
 	if (rd_kafka_conf_get(conf, name, ret, &ret_sz) != RD_KAFKA_CONF_OK)
 		TEST_FAIL("Failed to get config \"%s\": %s\n", name,
 			  "unknown property");
 	return ret;
+}
+
+
+/**
+ * @brief Check if property \name matches \p val in \p conf.
+ *        If \p conf is NULL the test config will be used. */
+int test_conf_match (rd_kafka_conf_t *conf, const char *name, const char *val) {
+        char *real;
+        int free_conf = 0;
+
+        if (!conf) {
+                test_conf_init(&conf, NULL, 0);
+                free_conf = 1;
+        }
+
+        real = test_conf_get(conf, name);
+
+        if (free_conf)
+                rd_kafka_conf_destroy(conf);
+
+        return !strcmp(real, val);
 }
 
 
