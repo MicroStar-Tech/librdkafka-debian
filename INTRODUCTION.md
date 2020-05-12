@@ -1031,6 +1031,16 @@ the logging level will be LOG_WARNING (4), else LOG_INFO (6).
 but it is recommended to instead rely on the above heuristics.
 
 
+#### Fetch From Follower
+
+librdkafka supports consuming messages from follower replicas
+([KIP-392](https://cwiki.apache.org/confluence/display/KAFKA/KIP-392%3A+Allow+consumers+to+fetch+from+closest+replica)).
+This is enabled by setting the `client.rack` configuration property which
+corresponds to `broker.rack` on the broker. The actual assignment of
+consumers to replicas is determined by the configured `replica.selector.class`
+on the broker.
+
+
 ### Logging
 
 #### Debug contexts
@@ -1531,7 +1541,7 @@ The [Apache Kafka Implementation Proposals (KIPs)](https://cwiki.apache.org/conf
 | KIP-339 - AdminAPI: incrementalAlterConfigs                              | 2.3.0                                     | Not supported                                                                                 |
 | KIP-341 - Update Sticky partition assignment data                        | 2.3.0                                     | Not supported                                                                                 |
 | KIP-342 - Custom SASL OAUTHBEARER extensions                             | 2.1.0                                     | Supported                                                                                     |
-| KIP-345 - Consumer: Static membership                                    | 2.4.0 (WIP), partially available in 2.3.0 | In progress                                                                                   |
+| KIP-345 - Consumer: Static membership                                    | 2.4.0 (WIP), partially available in 2.3.0 | Supported                                                                                     |
 | KIP-357 - AdminAPI: list ACLs per principal                              | 2.1.0                                     | Not supported                                                                                 |
 | KIP-359 - Producer: use EpochLeaderId                                    | 2.4.0 (WIP)                               | Not supported                                                                                 |
 | KIP-360 - Improve handling of unknown Idempotent Producer                | 2.4.0 (WIP)                               | Not supported                                                                                 |
@@ -1539,6 +1549,7 @@ The [Apache Kafka Implementation Proposals (KIPs)](https://cwiki.apache.org/conf
 | KIP-368 - SASL period reauth                                             | 2.2.0                                     | Not supported                                                                                 |
 | KIP-369 - Always roundRobin partitioner                                  | 2.4.0                                     | Not supported                                                                                 |
 | KIP-389 - Consumer group max size                                        | 2.2.0                                     | Supported (error is propagated to application, but the consumer does not raise a fatal error) |
+| KIP-392 - Allow consumers to fetch from closest replica                  | 2.4.0                                     | Supported                                                                                     |
 | KIP-394 - Consumer: require member.id in JoinGroupRequest                | 2.2.0                                     | In progress as part of KIP-345                                                                |
 | KIP-396 - AdminAPI: commit/list offsets                                  | 2.4.0 (WIP)                               | Not supported                                                                                 |
 | KIP-412 - AdminAPI: adjust log levels                                    | 2.4.0 (WIP)                               | Not supported                                                                                 |
@@ -1574,7 +1585,7 @@ release of librdkafka.
 | 7       | ControlledShutdown      | 2           | -                       |
 | 8       | OffsetCommit            | 7           | 7                       |
 | 9       | OffsetFetch             | 5           | 1                       |
-| 10      | FindCoordinator         | 2           | 0                       |
+| 10      | FindCoordinator         | 2           | 2                       |
 | 11      | JoinGroup               | 5           | 5                       |
 | 12      | Heartbeat               | 3           | 3                       |
 | 13      | LeaveGroup              | 3           | 1                       |
