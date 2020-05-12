@@ -48,8 +48,10 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_NewTopic_set_config@Base 0.11.5
  rd_kafka_NewTopic_set_replica_assignment@Base 0.11.5
  rd_kafka_ResourceType_name@Base 0.11.5
+ rd_kafka_abort_transaction@Base 1.4.2
  rd_kafka_assign@Base 0.9.0
  rd_kafka_assignment@Base 0.9.0
+ rd_kafka_begin_transaction@Base 1.4.2
  rd_kafka_brokers_add@Base 0.8.0
  rd_kafka_clusterid@Base 0.11.0
  rd_kafka_commit@Base 0.9.0
@@ -100,6 +102,11 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_consume_start_queue@Base 0.8.4
  rd_kafka_consume_stop@Base 0.8.0
  rd_kafka_consumer_close@Base 0.9.0
+ rd_kafka_consumer_group_metadata@Base 1.4.2
+ rd_kafka_consumer_group_metadata_destroy@Base 1.4.2
+ rd_kafka_consumer_group_metadata_new@Base 1.4.2
+ rd_kafka_consumer_group_metadata_read@Base 1.4.2
+ rd_kafka_consumer_group_metadata_write@Base 1.4.2
  rd_kafka_consumer_poll@Base 0.9.0
  rd_kafka_controllerid@Base 0.11.5
  rd_kafka_default_topic_conf_dup@Base 0.11.4
@@ -136,6 +143,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_get_err_descs@Base 0.9.1
  rd_kafka_get_watermark_offsets@Base 0.9.1
  rd_kafka_group_list_destroy@Base 0.9.1
+ rd_kafka_handle_mock_cluster@Base 1.4.2
  rd_kafka_header_add@Base 0.11.4
  rd_kafka_header_cnt@Base 0.11.4
  rd_kafka_header_get@Base 0.11.4
@@ -145,6 +153,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_headers_copy@Base 0.11.4
  rd_kafka_headers_destroy@Base 0.11.4
  rd_kafka_headers_new@Base 0.11.4
+ rd_kafka_init_transactions@Base 1.4.2
  rd_kafka_interceptor_add_on_acknowledgement@Base 0.11.0
  rd_kafka_interceptor_add_on_commit@Base 0.11.0
  rd_kafka_interceptor_add_on_consume@Base 0.11.0
@@ -168,7 +177,9 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_message_timestamp@Base 0.9.1
  rd_kafka_metadata@Base 0.8.4
  rd_kafka_metadata_destroy@Base 0.8.4
+ rd_kafka_mock_broker_set_down@Base 1.4.2
  rd_kafka_mock_broker_set_rack@Base 1.3.0
+ rd_kafka_mock_broker_set_up@Base 1.4.2
  rd_kafka_mock_cluster_bootstraps@Base 1.3.0
  rd_kafka_mock_cluster_destroy@Base 1.3.0
  rd_kafka_mock_cluster_handle@Base 1.3.0
@@ -215,6 +226,7 @@ librdkafka.so.1 librdkafka1 #MINVER#
  rd_kafka_queue_poll_callback@Base 0.9.4
  rd_kafka_resume_partitions@Base 0.9.1
  rd_kafka_seek@Base 0.9.0
+ rd_kafka_send_offsets_to_transaction@Base 1.4.2
  rd_kafka_set_log_level@Base 0.8.0
  rd_kafka_set_log_queue@Base 0.9.4
  rd_kafka_set_logger@Base 0.8.0
