@@ -34,7 +34,9 @@
 #include "rdkafka_interceptor.h"
 #include "rdkafka_header.h"
 #include "rdkafka_idempotence.h"
+#include "rdkafka_txnmgr.h"
 #include "rdcrc32.h"
+#include "rdfnv1a.h"
 #include "rdmurmur2.h"
 #include "rdrand.h"
 #include "rdtime.h"
@@ -42,6 +44,31 @@
 #include "rdunittest.h"
 
 #include <stdarg.h>
+
+
+/**
+ * @brief Check if producing is allowed.
+ *
+ * @returns an error if not allowed, else 0.
+ *
+ * @remarks Also sets the corresponding errno.
+ */
+static RD_INLINE rd_kafka_resp_err_t rd_kafka_check_produce (rd_kafka_t *rk) {
+
+        if (unlikely(rd_kafka_fatal_error_code(rk))) {
+                rd_kafka_set_last_error(RD_KAFKA_RESP_ERR__FATAL, ECANCELED);
+                return RD_KAFKA_RESP_ERR__FATAL;
+        }
+
+        if (rd_kafka_txn_may_enq_msg(rk))
+                return RD_KAFKA_RESP_ERR_NO_ERROR;
+
+        /* Transactional state forbids producing */
+        rd_kafka_set_last_error(RD_KAFKA_RESP_ERR__STATE, ENOEXEC);
+
+        return RD_KAFKA_RESP_ERR__STATE;
+}
+
 
 void rd_kafka_msg_destroy (rd_kafka_t *rk, rd_kafka_msg_t *rkm) {
 
@@ -132,7 +159,6 @@ rd_kafka_msg_t *rd_kafka_msg_new00 (rd_kafka_itopic_t *rkt,
 		rkm->rkm_key = NULL;
 		rkm->rkm_key_len = 0;
 	}
-
 
         return rkm;
 }
@@ -247,10 +273,8 @@ int rd_kafka_msg_new (rd_kafka_itopic_t *rkt, int32_t force_partition,
 	rd_kafka_resp_err_t err;
 	int errnox;
 
-        if (unlikely((err = rd_kafka_fatal_error_code(rkt->rkt_rk)))) {
-                rd_kafka_set_last_error(err, ECANCELED);
+        if (unlikely((err = rd_kafka_check_produce(rkt->rkt_rk))))
                 return -1;
-        }
 
         /* Create message */
         rkm = rd_kafka_msg_new0(rkt, force_partition, msgflags,
@@ -312,7 +336,7 @@ rd_kafka_resp_err_t rd_kafka_producev (rd_kafka_t *rk, ...) {
         rd_kafka_headers_t *hdrs = NULL;
         rd_kafka_headers_t *app_hdrs = NULL; /* App-provided headers list */
 
-        if (unlikely((err = rd_kafka_fatal_error_code(rk))))
+        if (unlikely((err = rd_kafka_check_produce(rk))))
                 return err;
 
         va_start(ap, rk);
@@ -490,7 +514,7 @@ int rd_kafka_produce_batch (rd_kafka_topic_t *app_rkt, int32_t partition,
         shptr_rd_kafka_toppar_t *s_rktp = NULL;
 
         /* Propagated per-message below */
-        all_err = rd_kafka_fatal_error_code(rkt->rkt_rk);
+        all_err = rd_kafka_check_produce(rkt->rkt_rk);
 
         rd_kafka_topic_rdlock(rkt);
         if (!multiple_partitions) {
@@ -562,6 +586,12 @@ int rd_kafka_produce_batch (rd_kafka_topic_t *app_rkt, int32_t partition,
                                 }
                                 rd_kafka_toppar_enq_msg(
                                         rd_kafka_toppar_s2i(s_rktp), rkm);
+
+                                if (rd_kafka_is_transactional(rkt->rkt_rk)) {
+                                        /* Add partition to transaction */
+                                        rd_kafka_txn_add_partition(
+                                                rd_kafka_toppar_s2i(s_rktp));
+                                }
                         }
 
                         if (unlikely(rkmessages[i].err)) {
@@ -585,6 +615,15 @@ int rd_kafka_produce_batch (rd_kafka_topic_t *app_rkt, int32_t partition,
         }
 
         rd_kafka_topic_rdunlock(rkt);
+
+	if (!multiple_partitions && good > 0 &&
+            rd_kafka_is_transactional(rkt->rkt_rk) &&
+            rd_kafka_toppar_s2i(s_rktp)->rktp_partition !=
+            RD_KAFKA_PARTITION_UA) {
+                /* Add single destination partition to transaction */
+                rd_kafka_txn_add_partition(rd_kafka_toppar_s2i(s_rktp));
+        }
+
         if (s_rktp != NULL)
                 rd_kafka_toppar_destroy(s_rktp);
 
@@ -754,7 +793,7 @@ void rd_kafka_msgq_set_metadata (rd_kafka_msgq_t *rkmq,
                 rkm->rkm_offset = base_offset++;
                 if (timestamp != -1) {
                         rkm->rkm_timestamp = timestamp;
-                        rkm->rkm_tstype = RD_KAFKA_MSG_ATTR_LOG_APPEND_TIME;
+                        rkm->rkm_tstype = RD_KAFKA_TIMESTAMP_LOG_APPEND_TIME;
                 }
 
                 /* Don't downgrade a message from any form of PERSISTED
@@ -860,14 +899,44 @@ int32_t rd_kafka_msg_partitioner_murmur2_random (const rd_kafka_topic_t *rkt,
                 return (rd_murmur2(key, keylen) & 0x7fffffff) % partition_cnt;
 }
 
+int32_t rd_kafka_msg_partitioner_fnv1a (const rd_kafka_topic_t *rkt,
+                                        const void *key, size_t keylen,
+                                        int32_t partition_cnt,
+                                        void *rkt_opaque,
+                                        void *msg_opaque) {
+        return rd_fnv1a(key, keylen) % partition_cnt;
+}
+
+int32_t rd_kafka_msg_partitioner_fnv1a_random (const rd_kafka_topic_t *rkt,
+                                               const void *key, size_t keylen,
+                                               int32_t partition_cnt,
+                                               void *rkt_opaque,
+                                               void *msg_opaque) {
+        if (!key)
+                return rd_kafka_msg_partitioner_random(rkt,
+                                                       key,
+                                                       keylen,
+                                                       partition_cnt,
+                                                       rkt_opaque,
+                                                       msg_opaque);
+        else
+                return rd_fnv1a(key, keylen) % partition_cnt;
+}
+
 
 /**
- * Assigns a message to a topic partition using a partitioner.
- * Returns RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION or .._UNKNOWN_TOPIC if
- * partitioning failed, or 0 on success.
+ * @brief Assigns a message to a topic partition using a partitioner.
+ *
+ * @param do_lock if RD_DO_LOCK then acquire topic lock.
+ *
+ * @returns RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION or .._UNKNOWN_TOPIC if
+ *          partitioning failed, or 0 on success.
+ *
+ * @locality any
+ * @locks rd_kafka_
  */
 int rd_kafka_msg_partitioner (rd_kafka_itopic_t *rkt, rd_kafka_msg_t *rkm,
-			      int do_lock) {
+                              rd_dolock_t do_lock) {
 	int32_t partition;
 	rd_kafka_toppar_t *rktp_new;
         shptr_rd_kafka_toppar_t *s_rktp_new;
@@ -965,6 +1034,13 @@ int rd_kafka_msg_partitioner (rd_kafka_itopic_t *rkt, rd_kafka_msg_t *rkm,
 	rd_kafka_toppar_enq_msg(rktp_new, rkm);
 	if (do_lock)
 		rd_kafka_topic_rdunlock(rkt);
+
+        if (rktp_new->rktp_partition != RD_KAFKA_PARTITION_UA &&
+            rd_kafka_is_transactional(rkt->rkt_rk)) {
+                /* Add partition to transaction */
+                rd_kafka_txn_add_partition(rktp_new);
+        }
+
 	rd_kafka_toppar_destroy(s_rktp_new); /* from _get() */
 	return 0;
 }
@@ -1831,7 +1907,7 @@ unittest_msgq_insert_all_sort (const char *what,
         ut_rd_kafka_msgq_purge(&srcq);
         ut_rd_kafka_msgq_purge(&destq);
 
-        if (!rd_unittest_on_ci)
+        if (!rd_unittest_slow)
                 RD_UT_ASSERT(!(us_per_msg > max_us_per_msg + 0.0001),
                              "maximum us/msg exceeded: %.4f > %.4f us/msg",
                              us_per_msg, max_us_per_msg);
@@ -1941,7 +2017,7 @@ unittest_msgq_insert_each_sort (const char *what,
         RD_UT_SAY("Total: %.4fus/msg over %"PRId64" messages in %"PRId64"us",
                   us_per_msg, scnt, accum_ts);
 
-        if (!rd_unittest_on_ci)
+        if (!rd_unittest_slow)
                 RD_UT_ASSERT(!(us_per_msg > max_us_per_msg + 0.0001),
                              "maximum us/msg exceeded: %.4f > %.4f us/msg",
                              us_per_msg, max_us_per_msg);

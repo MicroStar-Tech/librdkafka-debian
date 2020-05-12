@@ -60,9 +60,9 @@ msg_size | int gauge | | Current total size of messages in producer queues
 msg_max | int | | Threshold: maximum number of messages allowed allowed on the producer queues
 msg_size_max | int | | Threshold: maximum total size of messages allowed on the producer queues
 tx | int | | Total number of requests sent to Kafka brokers
-txbytes | int | | Total number of bytes transmitted to Kafka brokers
+tx_bytes | int | | Total number of bytes transmitted to Kafka brokers
 rx | int | | Total number of responses received from Kafka brokers
-rxbytes | int | | Total number of bytes received from Kafka brokers
+rx_bytes | int | | Total number of bytes received from Kafka brokers
 txmsgs | int | | Total number of messages transmitted (produced) to Kafka brokers
 txmsg_bytes | int | | Total number of message bytes (including framing, such as per-Message framing and MessageSet/batch framing) transmitted to Kafka brokers
 rxmsgs | int | | Total number of messages consumed, not including ignored messages (due to offset, etc), from Kafka brokers.
@@ -209,11 +209,14 @@ assignment_size | int gauge | | Current assignment's partition count.
 
 Field | Type | Example | Description
 ----- | ---- | ------- | -----------
-idemp_state | string | "Assigned" | Current idempotent producer id state
-idemp_stateage | int gauge | | Time elapsed since last idemp_state change (milliseconds)
-producer_id | int gauge | | The currently assigned Producer ID (or -1)
-producer_epoch | int gauge | | The current epoch (or -1)
-epoch_cnt | int | | The number of Producer ID assignments since start
+idemp_state | string | "Assigned" | Current idempotent producer id state.
+idemp_stateage | int gauge | | Time elapsed since last idemp_state change (milliseconds).
+txn_state | string | "InTransaction" | Current transactional producer state.
+txn_stateage | int gauge | | Time elapsed since last txn_state change (milliseconds).
+txn_may_enq | bool | | Transactional state allows enqueuing (producing) new messages.
+producer_id | int gauge | | The currently assigned Producer ID (or -1).
+producer_epoch | int gauge | | The current epoch (or -1).
+epoch_cnt | int | | The number of Producer ID assignments since start.
 
 
 # Example output

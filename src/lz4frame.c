@@ -94,7 +94,7 @@
 #define LZ4_HC_STATIC_LINKING_ONLY
 #include "lz4hc.h"
 #define XXH_STATIC_LINKING_ONLY
-#include "xxhash.h"
+#include "rdxxhash.h"
 
 
 /*-************************************
@@ -834,7 +834,7 @@ size_t LZ4F_compressUpdate(LZ4F_cctx* cctxPtr,
     LZ4F_lastBlockStatus lastBlockCompressed = notDone;
     compressFunc_t const compress = LZ4F_selectCompression(cctxPtr->prefs.frameInfo.blockMode, cctxPtr->prefs.compressionLevel);
 
-    DEBUGLOG(4, "LZ4F_compressUpdate (srcSize=%zu)", srcSize);
+    DEBUGLOG(4, "LZ4F_compressUpdate (srcSize=%"PRIusz")", srcSize);
 
     if (cctxPtr->cStage != 1) return err0r(LZ4F_ERROR_GENERIC);
     if (dstCapacity < LZ4F_compressBound_internal(srcSize, &(cctxPtr->prefs), cctxPtr->tmpInSize))
