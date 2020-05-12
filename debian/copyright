@@ -57,7 +57,7 @@ License: BSD-3-clause
   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Files: src/xxhash.h src/xxhash.c src/lz4*.h src/lz4*.c
+Files: src/rdxxhash.h src/rdxxhash.c src/lz4*.h src/lz4*.c
 Copyright: 2011-2016, Yann Collet
 License: BSD-2-clause
 
