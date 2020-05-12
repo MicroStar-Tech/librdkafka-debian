@@ -64,7 +64,7 @@ rd_kafka_compression2str (rd_kafka_compression_t compr) {
         };
         static RD_TLS char ret[32];
 
-        if (compr < 0 || compr >= RD_KAFKA_COMPRESSION_NUM) {
+        if ((int)compr < 0 || compr >= RD_KAFKA_COMPRESSION_NUM) {
                 rd_snprintf(ret, sizeof(ret),
                             "codec0x%x?", (int)compr);
                 return ret;
@@ -156,7 +156,7 @@ typedef enum {
 
 /* Increase in steps of 64 as needed.
  * This must be larger than sizeof(rd_kafka_[topic_]conf_t) */
-#define RD_KAFKA_CONF_PROPS_IDX_MAX (64*26)
+#define RD_KAFKA_CONF_PROPS_IDX_MAX (64*27)
 
 /**
  * @struct rd_kafka_anyconf_t
@@ -367,10 +367,18 @@ struct rd_kafka_conf_s {
 	 * Producer configuration
 	 */
         struct {
+                /*
+                 * Idempotence
+                 */
                 int    idempotence;  /**< Enable Idempotent Producer */
                 rd_bool_t gapless;   /**< Raise fatal error if
                                       *   gapless guarantee can't be
                                       *   satisfied. */
+                /*
+                 * Transactions
+                 */
+                char *transactional_id;       /**< Transactional Id */
+                int   transaction_timeout_ms; /**< Transaction timeout */
         } eos;
 	int    queue_buffering_max_msgs;
 	int    queue_buffering_max_kbytes;
@@ -418,6 +426,9 @@ struct rd_kafka_conf_s {
         int    log_queue;
         int    log_thread_name;
         int    log_connection_close;
+
+        /* PRNG seeding */
+        int    enable_random_seed;
 
         /* Error callback */
 	void (*error_cb) (rd_kafka_t *rk, int err,
@@ -487,6 +498,9 @@ struct rd_kafka_conf_s {
                         uint64_t msgid,
                         rd_kafka_resp_err_t err);
         } ut;
+
+        char *sw_name;    /**< Software/client name */
+        char *sw_version; /**< Software/client version */
 };
 
 int rd_kafka_socket_cb_linux (int domain, int type, int protocol, void *opaque);

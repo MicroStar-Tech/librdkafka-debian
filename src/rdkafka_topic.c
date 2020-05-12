@@ -301,6 +301,10 @@ shptr_rd_kafka_itopic_t *rd_kafka_topic_new0 (rd_kafka_t *rk,
                           (void *)rd_kafka_msg_partitioner_murmur2 },
                         { "murmur2_random",
                           (void *)rd_kafka_msg_partitioner_murmur2_random },
+                        { "fnv1a",
+                          (void *)rd_kafka_msg_partitioner_fnv1a },
+                        { "fnv1a_random",
+                          (void *)rd_kafka_msg_partitioner_fnv1a_random },
                         { NULL }
                 };
                 int i;
@@ -561,9 +565,10 @@ static int rd_kafka_toppar_leader_update (rd_kafka_itopic_t *rkt,
                  * Probably caused by corrupt broker state. */
                 rd_kafka_log(rkt->rkt_rk, LOG_WARNING, "BROKER",
                              "%s [%"PRId32"] is unknown "
-                             "(partition_cnt %i)",
+                             "(partition_cnt %i): "
+                             "ignoring leader (%"PRId32") update",
                              rkt->rkt_topic->str, partition,
-                             rkt->rkt_partition_cnt);
+                             rkt->rkt_partition_cnt, leader_id);
                 return -1;
         }
 
@@ -572,6 +577,8 @@ static int rd_kafka_toppar_leader_update (rd_kafka_itopic_t *rkt,
         rd_kafka_toppar_lock(rktp);
 
         if (leader != NULL &&
+            rktp->rktp_broker != NULL &&
+            rktp->rktp_broker->rkb_source != RD_KAFKA_INTERNAL &&
             rktp->rktp_broker != leader &&
             rktp->rktp_leader_id == leader_id) {
                 rd_kafka_dbg(rktp->rktp_rkt->rkt_rk, TOPIC, "BROKER",
@@ -645,9 +652,12 @@ int rd_kafka_toppar_delegate_to_leader (rd_kafka_toppar_t *rktp) {
 
 
 /**
- * Update the number of partitions for a topic and takes according actions.
- * Returns 1 if the partition count changed, else 0.
- * NOTE: rd_kafka_topic_wrlock(rkt) MUST be held.
+ * @brief Update the number of partitions for a topic and takes actions
+ *        accordingly.
+ *
+ * @returns 1 if the partition count changed, else 0.
+ *
+ * @locks rd_kafka_topic_wrlock(rkt) MUST be held.
  */
 static int rd_kafka_topic_partition_cnt_update (rd_kafka_itopic_t *rkt,
 						int32_t partition_cnt) {
@@ -929,7 +939,7 @@ void rd_kafka_topic_metadata_none (rd_kafka_itopic_t *rkt) {
  *          topic is unknown.
 
  *
- * @locks rd_kafka*lock()
+ * @locks rd_kafka_*lock() MUST be held.
  */
 static int
 rd_kafka_topic_metadata_update (rd_kafka_itopic_t *rkt,

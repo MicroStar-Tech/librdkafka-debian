@@ -51,7 +51,6 @@
 #define RD_KAFKA_MSG_ATTR_CREATE_TIME      (0 << 3)
 #define RD_KAFKA_MSG_ATTR_LOG_APPEND_TIME  (1 << 3)
 
-
 /**
  * @brief MessageSet.Attributes for MsgVersion v2
  *
@@ -85,6 +84,7 @@ typedef struct rd_kafka_msg_s {
 #define RD_KAFKA_MSG_F_FREE_RKM     0x10000 /* msg_t is allocated */
 #define RD_KAFKA_MSG_F_ACCOUNT      0x20000 /* accounted for in curr_msgs */
 #define RD_KAFKA_MSG_F_PRODUCER     0x40000 /* Producer message */
+#define RD_KAFKA_MSG_F_CONTROL      0x80000 /* Control message */
 
 	rd_kafka_timestamp_type_t rkm_tstype; /* rkm_timestamp type */
 	int64_t    rkm_timestamp;  /* Message format V1.
@@ -503,7 +503,7 @@ void rd_kafka_msgq_move_acked (rd_kafka_msgq_t *dest, rd_kafka_msgq_t *src,
                                rd_kafka_msg_status_t status);
 
 int rd_kafka_msg_partitioner (rd_kafka_itopic_t *rkt, rd_kafka_msg_t *rkm,
-                              int do_lock);
+                              rd_dolock_t do_lock);
 
 
 rd_kafka_message_t *rd_kafka_message_get (struct rd_kafka_op_s *rko);

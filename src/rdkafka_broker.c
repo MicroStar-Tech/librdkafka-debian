@@ -61,6 +61,7 @@
 #include "rdkafka_sasl.h"
 #include "rdkafka_interceptor.h"
 #include "rdkafka_idempotence.h"
+#include "rdkafka_txnmgr.h"
 #include "rdtime.h"
 #include "rdcrc32.h"
 #include "rdrand.h"
@@ -105,6 +106,8 @@ const char *rd_kafka_secproto_names[] = {
 static RD_INLINE int
 rd_kafka_broker_needs_connection (rd_kafka_broker_t *rkb) {
         return rkb->rkb_state == RD_KAFKA_BROKER_STATE_INIT &&
+                !rd_kafka_terminating(rkb->rkb_rk) &&
+                !rd_kafka_fatal_error_code(rkb->rkb_rk) &&
                 (!rkb->rkb_rk->rk_conf.sparse_connections ||
                  rkb->rkb_persistconn.internal ||
                  rd_atomic32_get(&rkb->rkb_persistconn.coord));
@@ -113,8 +116,7 @@ rd_kafka_broker_needs_connection (rd_kafka_broker_t *rkb) {
 
 static void rd_kafka_broker_handle_purge_queues (rd_kafka_broker_t *rkb,
                                                  rd_kafka_op_t *rko);
-
-
+static void rd_kafka_broker_trigger_monitors (rd_kafka_broker_t *rkb);
 
 
 #define rd_kafka_broker_terminating(rkb) \
@@ -319,14 +321,22 @@ void rd_kafka_broker_set_state (rd_kafka_broker_t *rkb, int state) {
         if (rkb->rkb_source != RD_KAFKA_INTERNAL) {
                 if (rd_kafka_broker_state_is_up(state) &&
                     !rd_kafka_broker_state_is_up(rkb->rkb_state)) {
+                        /* Up -> Down */
                         rd_atomic32_add(&rkb->rkb_rk->rk_broker_up_cnt, 1);
+
+                        rd_kafka_broker_trigger_monitors(rkb);
+
                         if (RD_KAFKA_BROKER_IS_LOGICAL(rkb))
                                 rd_atomic32_add(&rkb->rkb_rk->
                                                 rk_logical_broker_up_cnt, 1);
 
                 } else if (rd_kafka_broker_state_is_up(rkb->rkb_state) &&
                            !rd_kafka_broker_state_is_up(state)) {
+                        /* ~Down(!Up) -> Up */
                         rd_atomic32_sub(&rkb->rkb_rk->rk_broker_up_cnt, 1);
+
+                        rd_kafka_broker_trigger_monitors(rkb);
+
                         if (RD_KAFKA_BROKER_IS_LOGICAL(rkb))
                                 rd_atomic32_sub(&rkb->rkb_rk->
                                                 rk_logical_broker_up_cnt, 1);
@@ -337,21 +347,6 @@ void rd_kafka_broker_set_state (rd_kafka_broker_t *rkb, int state) {
         rkb->rkb_ts_state = rd_clock();
 
 	rd_kafka_brokers_broadcast_state_change(rkb->rkb_rk);
-}
-
-
-/**
- * @brief Locks broker, acquires the states, unlocks, and returns
- *        the state.
- * @locks !broker_lock
- * @locality any
- */
-int rd_kafka_broker_get_state (rd_kafka_broker_t *rkb) {
-        int state;
-        rd_kafka_broker_lock(rkb);
-        state = rkb->rkb_state;
-        rd_kafka_broker_unlock(rkb);
-        return state;
 }
 
 
@@ -1153,6 +1148,10 @@ void rd_kafka_brokers_broadcast_state_change (rd_kafka_t *rk) {
  *
  * Uses reservoir sampling.
  *
+ * @param is_up Any broker that is up (UP or UPDATE state), \p state is ignored.
+ * @param filtered_cnt Optional pointer to integer which will be set to the
+ *               number of brokers that matches the \p state or \p is_up but
+ *               were filtered out by \p filter.
  * @param filter is an optional callback used to filter out undesired brokers.
  *               The filter function should return 1 to filter out a broker,
  *               or 0 to keep it in the list of eligible brokers to return.
@@ -1163,33 +1162,50 @@ void rd_kafka_brokers_broadcast_state_change (rd_kafka_t *rk) {
  * @locality any
  */
 static rd_kafka_broker_t *
-rd_kafka_broker_random (rd_kafka_t *rk,
-                        int state,
-                        int (*filter) (rd_kafka_broker_t *rk, void *opaque),
-                        void *opaque) {
+rd_kafka_broker_random0 (const char *func, int line,
+                         rd_kafka_t *rk,
+                         rd_bool_t is_up,
+                         int state,
+                         int *filtered_cnt,
+                         int (*filter) (rd_kafka_broker_t *rk, void *opaque),
+                         void *opaque) {
         rd_kafka_broker_t *rkb, *good = NULL;
         int cnt = 0;
+        int fcnt = 0;
 
         TAILQ_FOREACH(rkb, &rk->rk_brokers, rkb_link) {
                 if (RD_KAFKA_BROKER_IS_LOGICAL(rkb))
                         continue;
 
                 rd_kafka_broker_lock(rkb);
-                if ((int)rkb->rkb_state == state &&
-                    (!filter || !filter(rkb, opaque))) {
-                        if (cnt < 1 || rd_jitter(0, cnt) < 1) {
-                                if (good)
-                                        rd_kafka_broker_destroy(good);
-                                rd_kafka_broker_keep(rkb);
-                                good = rkb;
+                if ((is_up && rd_kafka_broker_state_is_up(rkb->rkb_state)) ||
+                    (!is_up && (int)rkb->rkb_state == state)) {
+                        if (filter && filter(rkb, opaque)) {
+                                /* Filtered out */
+                                fcnt++;
+                        } else {
+                                if (cnt < 1 || rd_jitter(0, cnt) < 1) {
+                                        if (good)
+                                                rd_kafka_broker_destroy(good);
+                                        rd_kafka_broker_keep_fl(func, line,
+                                                                rkb);
+                                        good = rkb;
+                                }
+                                cnt += 1;
                         }
-                        cnt += 1;
                 }
 		rd_kafka_broker_unlock(rkb);
 	}
 
+        if (filtered_cnt)
+                *filtered_cnt = fcnt;
+
         return good;
 }
+
+#define rd_kafka_broker_random(rk,state,filter,opaque)                  \
+        rd_kafka_broker_random0(__FUNCTION__, __LINE__,                 \
+                                rk, rd_false, state, NULL, filter, opaque)
 
 
 /**
@@ -1225,6 +1241,42 @@ rd_kafka_broker_t *rd_kafka_broker_any (rd_kafka_t *rk, int state,
 
 
 /**
+ * @brief Returns a random broker (with refcnt increased) which is up.
+ *
+ * Uses Reservoir sampling.
+ *
+ * @param filtered_cnt optional, see rd_kafka_broker_random0().
+ * @param filter is optional, see rd_kafka_broker_random0().
+ *
+ * @sa rd_kafka_broker_random
+ *
+ * @locks rd_kafka_*lock(rk) MUST be held.
+ * @locality any thread
+ */
+rd_kafka_broker_t *
+rd_kafka_broker_any_up (rd_kafka_t *rk,
+                        int *filtered_cnt,
+                        int (*filter) (rd_kafka_broker_t *rkb,
+                                       void *opaque),
+                        void *opaque, const char *reason) {
+        rd_kafka_broker_t *rkb;
+
+        rkb = rd_kafka_broker_random0(__FUNCTION__, __LINE__,
+                                      rk, rd_true/*is_up*/, -1,
+                                      filtered_cnt, filter, opaque);
+
+        if (!rkb && rk->rk_conf.sparse_connections) {
+                /* Sparse connections:
+                 * If no eligible broker was found, schedule
+                 * a random broker for connecting. */
+                rd_kafka_connect_any(rk, reason);
+        }
+
+        return rkb;
+}
+
+
+/**
  * @brief Spend at most \p timeout_ms to acquire a usable (Up && non-blocking)
  *        broker.
  *
@@ -1246,12 +1298,12 @@ rd_kafka_broker_t *rd_kafka_broker_any_usable (rd_kafka_t *rk,
                 /* Try non-blocking (e.g., non-fetching) brokers first. */
                 if (do_lock)
                         rd_kafka_rdlock(rk);
-                rkb = rd_kafka_broker_any(rk, RD_KAFKA_BROKER_STATE_UP,
-                                          rd_kafka_broker_filter_non_blocking,
-                                          NULL, reason);
+                rkb = rd_kafka_broker_any_up(
+                        rk, NULL, rd_kafka_broker_filter_non_blocking, NULL,
+                        reason);
                 if (!rkb)
-                        rkb = rd_kafka_broker_any(rk, RD_KAFKA_BROKER_STATE_UP,
-                                                  NULL, NULL, reason);
+                        rkb = rd_kafka_broker_any_up(rk, NULL, NULL, NULL,
+                                                     reason);
                 if (do_lock)
                         rd_kafka_rdunlock(rk);
 
@@ -1314,7 +1366,7 @@ rd_kafka_broker_t *rd_kafka_broker_prefer (rd_kafka_t *rk, int32_t broker_id,
 
 
 /**
- * @returns the broker handle fork \p broker_id using cached metadata
+ * @returns the broker handle for \p broker_id using cached metadata
  *          information (if available) in state == \p state,
  *          with refcount increaesd.
  *
@@ -1507,8 +1559,12 @@ static int rd_kafka_req_response (rd_kafka_broker_t *rkb,
 		   rkbuf->rkbuf_totlen, rkbuf->rkbuf_reshdr.CorrId,
 		   (float)req->rkbuf_ts_sent / 1000.0f);
 
-        /* Copy request's header to response object's reqhdr for convenience. */
+        /* Copy request's header and certain flags to response object's
+         * reqhdr for convenience. */
         rkbuf->rkbuf_reqhdr = req->rkbuf_reqhdr;
+        rkbuf->rkbuf_flags |= (req->rkbuf_flags &
+                               RD_KAFKA_BUF_FLAGS_RESP_COPY_MASK);
+        rkbuf->rkbuf_ts_sent = req->rkbuf_ts_sent;  /* copy rtt */
 
         /* Set up response reader slice starting past the response header */
         rd_slice_init(&rkbuf->rkbuf_reader, &rkbuf->rkbuf_buf,
@@ -1912,8 +1968,13 @@ rd_kafka_broker_handle_SaslHandshake (rd_kafka_t *rk,
 	rd_kafka_buf_read_i16(rkbuf, &ErrorCode);
         rd_kafka_buf_read_i32(rkbuf, &MechCnt);
 
+        if (MechCnt < 0 || MechCnt > 100)
+                rd_kafka_buf_parse_fail(rkbuf,
+                                        "Invalid MechanismCount %"PRId32,
+                                        MechCnt);
+
 	/* Build a CSV string of supported mechanisms. */
-	msz = RD_MIN(511, MechCnt * 32);
+	msz = RD_MIN(511, 1 + (MechCnt * 32));
 	mechs = rd_alloca(msz);
 	*mechs = '\0';
 
@@ -2082,8 +2143,9 @@ rd_kafka_broker_handle_ApiVersion (rd_kafka_t *rk,
 				   rd_kafka_resp_err_t err,
 				   rd_kafka_buf_t *rkbuf,
 				   rd_kafka_buf_t *request, void *opaque) {
-	struct rd_kafka_ApiVersion *apis;
-	size_t api_cnt;
+	struct rd_kafka_ApiVersion *apis = NULL;
+	size_t api_cnt = 0;
+        int16_t retry_ApiVersion = -1;
 
 	if (err == RD_KAFKA_RESP_ERR__DESTROY)
 		return;
@@ -2091,11 +2153,68 @@ rd_kafka_broker_handle_ApiVersion (rd_kafka_t *rk,
 	err = rd_kafka_handle_ApiVersion(rk, rkb, err, rkbuf, request,
 					 &apis, &api_cnt);
 
+        /* Broker does not support our ApiVersionRequest version,
+         * see if we can downgrade to an older version. */
+        if (err == RD_KAFKA_RESP_ERR_UNSUPPORTED_VERSION) {
+                size_t i;
+
+                /* Find the broker's highest supported version for
+                 * ApiVersionRequest and use that to retry. */
+                for (i = 0 ; i < api_cnt ; i++) {
+                        if (apis[i].ApiKey == RD_KAFKAP_ApiVersion) {
+                                retry_ApiVersion = RD_MIN(
+                                        request->rkbuf_reqhdr.ApiVersion - 1,
+                                        apis[i].MaxVer);
+                                break;
+                        }
+                }
+
+                /* Before v3 the broker would not return its supported
+                 * ApiVersionRequests, so we go straight for version 0. */
+                if (i == api_cnt && request->rkbuf_reqhdr.ApiVersion > 0)
+                        retry_ApiVersion = 0;
+
+        } else if (err == RD_KAFKA_RESP_ERR_INVALID_REQUEST) {
+                rd_rkb_log(rkb, LOG_ERR, "APIVERSION",
+                           "ApiVersionRequest v%hd failed due to "
+                           "invalid request: "
+                           "check client.software.name (\"%s\") and "
+                           "client.software.version (\"%s\") "
+                           "for invalid characters: "
+                           "falling back to older request version",
+                           request->rkbuf_reqhdr.ApiVersion,
+                           rk->rk_conf.sw_name, rk->rk_conf.sw_version);
+                retry_ApiVersion = 0;
+        }
+
+        if (err && apis)
+                rd_free(apis);
+
+        if (retry_ApiVersion != -1) {
+                /* Retry request with a lower version */
+                rd_rkb_dbg(rkb,
+                           BROKER|RD_KAFKA_DBG_FEATURE|RD_KAFKA_DBG_PROTOCOL,
+                           "APIVERSION",
+                           "ApiVersionRequest v%hd failed due to %s: "
+                           "retrying with v%hd",
+                           request->rkbuf_reqhdr.ApiVersion,
+                           rd_kafka_err2name(err), retry_ApiVersion);
+                rd_kafka_ApiVersionRequest(rkb, retry_ApiVersion,
+                                           RD_KAFKA_NO_REPLYQ,
+                                           rd_kafka_broker_handle_ApiVersion,
+                                           NULL);
+                return;
+        }
+
+
 	if (err) {
 		rd_kafka_broker_fail(rkb, LOG_DEBUG,
 				     RD_KAFKA_RESP_ERR__TRANSPORT,
 				     "ApiVersionRequest failed: %s: "
-				     "probably due to old broker version",
+				     "probably due to incorrect "
+                                     "security.protocol "
+                                     "or broker version is < 0.10 "
+                                     "(see api.version.request)",
 				     rd_kafka_err2str(err));
 		return;
 	}
@@ -2161,7 +2280,8 @@ void rd_kafka_broker_connect_done (rd_kafka_broker_t *rkb, const char *errstr) {
 		rd_kafka_broker_unlock(rkb);
 
 		rd_kafka_ApiVersionRequest(
-			rkb, RD_KAFKA_NO_REPLYQ,
+			rkb, -1 /* Use highest version we support */,
+                        RD_KAFKA_NO_REPLYQ,
 			rd_kafka_broker_handle_ApiVersion, NULL);
 	} else {
 		/* Authenticate if necessary */
@@ -2235,7 +2355,7 @@ int rd_kafka_send (rd_kafka_broker_t *rkb) {
                                    "Failing %sResponse "
                                    "(v%hd, %"PRIusz" bytes, CorrId %"PRId32"): "
                                    "request not supported by broker "
-                                   "(missing api.version.request or "
+                                   "(missing api.version.request=false or "
                                    "incorrect broker.version.fallback config?)",
                                    rd_kafka_ApiKey2str(rkbuf->rkbuf_reqhdr.
                                                        ApiKey),
@@ -2373,7 +2493,7 @@ void rd_kafka_broker_buf_retry (rd_kafka_broker_t *rkb, rd_kafka_buf_t *rkbuf) {
                    rd_kafka_ApiKey2str(rkbuf->rkbuf_reqhdr.ApiKey),
                    rkbuf->rkbuf_reqhdr.ApiVersion,
                    rd_slice_size(&rkbuf->rkbuf_reader),
-                   rkbuf->rkbuf_retries, rkb->rkb_rk->rk_conf.max_retries,
+                   rkbuf->rkbuf_retries, rkbuf->rkbuf_max_retries,
                    rkbuf->rkbuf_corrid,
                    rkb->rkb_rk->rk_conf.retry_backoff_ms);
 
@@ -2396,17 +2516,21 @@ void rd_kafka_broker_buf_retry (rd_kafka_broker_t *rkb, rd_kafka_buf_t *rkbuf) {
 
 
 /**
- * Move buffers that have expired their retry backoff time from the 
+ * Move buffers that have expired their retry backoff time from the
  * retry queue to the outbuf.
  */
-static void rd_kafka_broker_retry_bufs_move (rd_kafka_broker_t *rkb) {
+static void rd_kafka_broker_retry_bufs_move (rd_kafka_broker_t *rkb,
+                                             rd_ts_t *next_wakeup) {
 	rd_ts_t now = rd_clock();
 	rd_kafka_buf_t *rkbuf;
         int cnt = 0;
 
 	while ((rkbuf = TAILQ_FIRST(&rkb->rkb_retrybufs.rkbq_bufs))) {
-		if (rkbuf->rkbuf_ts_retry > now)
+		if (rkbuf->rkbuf_ts_retry > now) {
+                        if (rkbuf->rkbuf_ts_retry < *next_wakeup)
+                                *next_wakeup = rkbuf->rkbuf_ts_retry;
 			break;
+                }
 
 		rd_kafka_bufq_deq(&rkb->rkb_retrybufs, rkbuf);
 
@@ -2440,7 +2564,7 @@ void rd_kafka_dr_msgq (rd_kafka_itopic_t *rkt,
         /* Call on_acknowledgement() interceptors */
         rd_kafka_interceptors_on_acknowledgement_queue(rk, rkmq, err);
 
-        if ((rk->rk_conf.enabled_events & RD_KAFKA_EVENT_DR) &&
+        if (rk->rk_drmode != RD_KAFKA_DR_MODE_NONE &&
 	    (!rk->rk_conf.dr_err_only || err)) {
 		/* Pass all messages to application thread in one op. */
 		rd_kafka_op_t *rko;
@@ -2586,6 +2710,23 @@ static void rd_kafka_broker_set_logname (rd_kafka_broker_t *rkb,
         mtx_unlock(&rkb->rkb_logname_lock);
 }
 
+
+
+/**
+ * @brief Prepare destruction of the broker object.
+ *
+ * Since rd_kafka_broker_terminating() relies on the refcnt of the
+ * broker to reach 1, we need to loose any self-references
+ * to avoid a hang (waiting for refcnt decrease) on destruction.
+ *
+ * @locality broker thread
+ * @locks none
+ */
+static void rd_kafka_broker_prepare_destroy (rd_kafka_broker_t *rkb) {
+        rd_kafka_broker_monitor_del(&rkb->rkb_coord_monitor);
+}
+
+
 /**
  * @brief Serve a broker op (an op posted by another thread to be handled by
  *        this broker's thread).
@@ -2671,7 +2812,7 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
 
                 if (updated & _UPD_NAME)
                         rd_kafka_broker_fail(rkb, LOG_DEBUG,
-                                             RD_KAFKA_RESP_ERR__NODE_UPDATE,
+                                             RD_KAFKA_RESP_ERR__TRANSPORT,
                                              "Broker hostname updated");
                 else if (updated & _UPD_ID) {
                         /* Map existing partitions to this broker. */
@@ -2774,7 +2915,7 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
                 rd_kafka_broker_keep(rkb);
 
                 if (rkb->rkb_rk->rk_type == RD_KAFKA_PRODUCER) {
-                        rd_kafka_broker_active_toppar_add(rkb, rktp);
+                        rd_kafka_broker_active_toppar_add(rkb, rktp, "joining");
 
                         if (rd_kafka_is_idempotent(rkb->rkb_rk)) {
                                 /* Wait for all outstanding requests from
@@ -2854,7 +2995,7 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
                                           msg_order_cmp);
 
                 if (rkb->rkb_rk->rk_type == RD_KAFKA_PRODUCER)
-                        rd_kafka_broker_active_toppar_del(rkb, rktp);
+                        rd_kafka_broker_active_toppar_del(rkb, rktp, "leaving");
 
                 rd_kafka_broker_lock(rkb);
 		TAILQ_REMOVE(&rkb->rkb_toppars, rktp, rktp_rkblink);
@@ -2917,6 +3058,8 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
                 rd_kafka_broker_fail(rkb, LOG_DEBUG,
                                      RD_KAFKA_RESP_ERR__DESTROY,
                                      "Client is terminating");
+
+                rd_kafka_broker_prepare_destroy(rkb);
                 ret = 0;
                 break;
 
@@ -2955,7 +3098,7 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
                         if (do_disconnect)
                                 rd_kafka_broker_fail(
                                         rkb, LOG_DEBUG,
-                                        RD_KAFKA_RESP_ERR__NODE_UPDATE,
+                                        RD_KAFKA_RESP_ERR__TRANSPORT,
                                         "Closing connection due to "
                                         "nodename change");
                 }
@@ -3233,6 +3376,10 @@ rd_kafka_broker_outbufs_space (rd_kafka_broker_t *rkb) {
  *
  * @param next_wakeup will be updated to when the next wake-up/attempt is
  *                    desired, only lower (sooner) values will be set.
+ * @param do_timeout_scan perform msg timeout scan
+ * @param may_send if set to false there is something on the global level
+ *                 that prohibits sending messages, such as a transactional
+ *                 state.
  *
  * @returns the number of messages produced.
  *
@@ -3244,7 +3391,8 @@ static int rd_kafka_toppar_producer_serve (rd_kafka_broker_t *rkb,
                                            const rd_kafka_pid_t pid,
                                            rd_ts_t now,
                                            rd_ts_t *next_wakeup,
-                                           int do_timeout_scan) {
+                                           rd_bool_t do_timeout_scan,
+                                           rd_bool_t may_send) {
         int cnt = 0;
         int r;
         rd_kafka_msg_t *rkm;
@@ -3310,11 +3458,18 @@ static int rd_kafka_toppar_producer_serve (rd_kafka_broker_t *rkb,
                 }
         }
 
-        if (unlikely(rd_kafka_fatal_error_code(rkb->rkb_rk))) {
+        if (unlikely(!may_send)) {
+                /* Sends prohibited on the broker or instance level */
+                max_requests = 0;
+        } else if (unlikely(rd_kafka_fatal_error_code(rkb->rkb_rk))) {
                 /* Fatal error has been raised, don't produce. */
                 max_requests = 0;
         } else if (unlikely(RD_KAFKA_TOPPAR_IS_PAUSED(rktp))) {
                 /* Partition is paused */
+                max_requests = 0;
+        } else if (unlikely(rd_kafka_is_transactional(rkb->rkb_rk) &&
+                            !rd_kafka_txn_toppar_may_send_msg(rktp))) {
+                /* Partition not registered in transaction yet */
                 max_requests = 0;
         } else if (max_requests > 0) {
                 /* Move messages from locked partition produce queue
@@ -3509,11 +3664,12 @@ static int rd_kafka_toppar_producer_serve (rd_kafka_broker_t *rkb,
 static int rd_kafka_broker_produce_toppars (rd_kafka_broker_t *rkb,
                                             rd_ts_t now,
                                             rd_ts_t *next_wakeup,
-                                            int do_timeout_scan) {
+                                            rd_bool_t do_timeout_scan) {
         rd_kafka_toppar_t *rktp;
         int cnt = 0;
         rd_ts_t ret_next_wakeup = *next_wakeup;
         rd_kafka_pid_t pid = RD_KAFKA_PID_INITIALIZER;
+        rd_bool_t may_send = rd_true;
 
         /* Round-robin serve each toppar. */
         rktp = rkb->rkb_active_toppar_next;
@@ -3524,10 +3680,18 @@ static int rd_kafka_broker_produce_toppars (rd_kafka_broker_t *rkb,
                 /* Idempotent producer: get a copy of the current pid. */
                 pid = rd_kafka_idemp_get_pid(rkb->rkb_rk);
 
-                /* If we don't have a valid pid return immedatiely,
+                /* If we don't have a valid pid, or the transaction state
+                 * prohibits sending messages, return immedatiely,
                  * unless the per-partition timeout scan needs to run.
-                 * The broker threads are woken up when a PID is acquired. */
-                if (!rd_kafka_pid_valid(pid) && !do_timeout_scan)
+                 * The broker threads are woken up when a PID is acquired
+                 * or the transaction state changes. */
+                if (!rd_kafka_pid_valid(pid))
+                        may_send = rd_false;
+                else if (rd_kafka_is_transactional(rkb->rkb_rk) &&
+                         !rd_kafka_txn_may_send_msg(rkb->rkb_rk))
+                        may_send = rd_false;
+
+                if (!may_send && !do_timeout_scan)
                         return 0;
         }
 
@@ -3537,7 +3701,7 @@ static int rd_kafka_broker_produce_toppars (rd_kafka_broker_t *rkb,
                 /* Try producing toppar */
                 cnt += rd_kafka_toppar_producer_serve(
                         rkb, rktp, pid, now, &this_next_wakeup,
-                        do_timeout_scan);
+                        do_timeout_scan, may_send);
 
                 if (this_next_wakeup < ret_next_wakeup)
                         ret_next_wakeup = this_next_wakeup;
@@ -3577,7 +3741,7 @@ static void rd_kafka_broker_producer_serve (rd_kafka_broker_t *rkb,
         while (!rd_kafka_broker_terminating(rkb) &&
                rkb->rkb_state == initial_state &&
                (abs_timeout > (now = rd_clock()))) {
-                int do_timeout_scan;
+                rd_bool_t do_timeout_scan;
                 rd_ts_t next_wakeup = abs_timeout;
 
 		rd_kafka_broker_unlock(rkb);
@@ -3594,7 +3758,7 @@ static void rd_kafka_broker_producer_serve (rd_kafka_broker_t *rkb,
 
 		/* Check and move retry buffers */
 		if (unlikely(rd_atomic32_get(&rkb->rkb_retrybufs.rkbq_cnt) > 0))
-			rd_kafka_broker_retry_bufs_move(rkb);
+			rd_kafka_broker_retry_bufs_move(rkb, &next_wakeup);
 
                 rd_kafka_broker_ops_io_serve(rkb, next_wakeup);
 
@@ -4536,7 +4700,7 @@ static void rd_kafka_broker_consumer_serve (rd_kafka_broker_t *rkb,
 
 		/* Check and move retry buffers */
 		if (unlikely(rd_atomic32_get(&rkb->rkb_retrybufs.rkbq_cnt) > 0))
-			rd_kafka_broker_retry_bufs_move(rkb);
+			rd_kafka_broker_retry_bufs_move(rkb, &min_backoff);
 
                 if (min_backoff > abs_timeout)
                         min_backoff = abs_timeout;
@@ -4635,8 +4799,11 @@ static void rd_kafka_broker_serve (rd_kafka_broker_t *rkb, int timeout_ms) {
         /* rkb_persistconn.internal is the per broker_serve()
          * automatic counter that keeps track of anything
          * in the producer/consumer logic needs this broker connection
-         * to be up. */
-        rkb->rkb_persistconn.internal = 0;
+         * to be up.
+         * The value is reset here on each serve(). If there are queued
+         * requests we know right away that a connection is needed. */
+        rkb->rkb_persistconn.internal =
+                rd_atomic32_get(&rkb->rkb_outbufs.rkbq_cnt) > 0;
 
         if (rkb->rkb_source == RD_KAFKA_INTERNAL)
                 rd_kafka_broker_internal_serve(rkb, abs_timeout);
@@ -4880,11 +5047,12 @@ static int rd_kafka_broker_thread_main (void *arg) {
  */
 void rd_kafka_broker_destroy_final (rd_kafka_broker_t *rkb) {
 
-        rd_kafka_assert(rkb->rkb_rk, thrd_is_current(rkb->rkb_thread));
-        rd_kafka_assert(rkb->rkb_rk, TAILQ_EMPTY(&rkb->rkb_outbufs.rkbq_bufs));
-        rd_kafka_assert(rkb->rkb_rk, TAILQ_EMPTY(&rkb->rkb_waitresps.rkbq_bufs));
-        rd_kafka_assert(rkb->rkb_rk, TAILQ_EMPTY(&rkb->rkb_retrybufs.rkbq_bufs));
-        rd_kafka_assert(rkb->rkb_rk, TAILQ_EMPTY(&rkb->rkb_toppars));
+        rd_assert(thrd_is_current(rkb->rkb_thread));
+        rd_assert(TAILQ_EMPTY(&rkb->rkb_monitors));
+        rd_assert(TAILQ_EMPTY(&rkb->rkb_outbufs.rkbq_bufs));
+        rd_assert(TAILQ_EMPTY(&rkb->rkb_waitresps.rkbq_bufs));
+        rd_assert(TAILQ_EMPTY(&rkb->rkb_retrybufs.rkbq_bufs));
+        rd_assert(TAILQ_EMPTY(&rkb->rkb_toppars));
 
         if (rkb->rkb_source != RD_KAFKA_INTERNAL &&
             (rkb->rkb_rk->rk_conf.security_protocol ==
@@ -4928,6 +5096,7 @@ void rd_kafka_broker_destroy_final (rd_kafka_broker_t *rkb) {
 
 	rd_free(rkb);
 }
+
 
 /**
  * Returns the internal broker with refcnt increased.
@@ -4992,6 +5161,7 @@ rd_kafka_broker_t *rd_kafka_broker_add (rd_kafka_t *rk,
         rkb->rkb_logname = rd_strdup(rkb->rkb_name);
 	TAILQ_INIT(&rkb->rkb_toppars);
         CIRCLEQ_INIT(&rkb->rkb_active_toppars);
+        TAILQ_INIT(&rkb->rkb_monitors);
 	rd_kafka_bufq_init(&rkb->rkb_outbufs);
 	rd_kafka_bufq_init(&rkb->rkb_waitresps);
 	rd_kafka_bufq_init(&rkb->rkb_retrybufs);
@@ -5129,6 +5299,13 @@ rd_kafka_broker_t *rd_kafka_broker_add (rd_kafka_t *rk,
 
 	rd_kafka_broker_unlock(rkb);
 
+        /* Add broker state monitor for the (txn) coordinator request to use */
+        if (rd_kafka_is_transactional(rk))
+                rd_kafka_broker_monitor_add(&rkb->rkb_coord_monitor, rkb,
+                                            rk->rk_ops,
+                                            rd_kafka_coord_rkb_monitor_cb);
+
+
 #ifndef _MSC_VER
 	/* Restore sigmask of caller */
 	pthread_sigmask(SIG_SETMASK, &oldset, NULL);
@@ -5265,10 +5442,12 @@ void rd_kafka_broker_set_nodename (rd_kafka_broker_t *rkb,
  * @locks: rd_kafka_*lock() MUST be held
  * @remark caller must release rkb reference by rd_kafka_broker_destroy()
  */
-rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0 (rd_kafka_t *rk,
-                                                    int32_t nodeid,
-                                                    int state,
-                                                    rd_bool_t do_connect) {
+rd_kafka_broker_t *
+rd_kafka_broker_find_by_nodeid0_fl (const char *func, int line,
+                                    rd_kafka_t *rk,
+                                    int32_t nodeid,
+                                    int state,
+                                    rd_bool_t do_connect) {
         rd_kafka_broker_t *rkb;
         rd_kafka_broker_t skel = { .rkb_nodeid = nodeid };
 
@@ -5296,7 +5475,7 @@ rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0 (rd_kafka_t *rk,
                 }
         }
 
-        rd_kafka_broker_keep(rkb);
+        rd_kafka_broker_keep_fl(func, line, rkb);
         return rkb;
 }
 
@@ -5511,11 +5690,18 @@ int rd_kafka_brokers_add (rd_kafka_t *rk, const char *brokerlist) {
 
 
 /**
- * Adds a new broker or updates an existing one.
+ * @brief Adds a new broker or updates an existing one.
  *
+ * @param rkbp if non-NULL, will be set to the broker object with
+ *             refcount increased, or NULL on error.
+ *
+ * @locks none
+ * @locality any
  */
-void rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
-                             const struct rd_kafka_metadata_broker *mdb) {
+void
+rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
+                        const struct rd_kafka_metadata_broker *mdb,
+                        rd_kafka_broker_t **rkbp) {
 	rd_kafka_broker_t *rkb;
         char nodename[RD_KAFKA_NODENAME_SIZE];
         int needs_update = 0;
@@ -5527,7 +5713,9 @@ void rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
 		/* Dont update metadata while terminating, do this
 		 * after acquiring lock for proper synchronisation */
 		rd_kafka_wrunlock(rk);
-		return;
+                if (rkbp)
+                        *rkbp = NULL;
+                return;
 	}
 
 	if ((rkb = rd_kafka_broker_find_by_nodeid(rk, mdb->id))) {
@@ -5559,8 +5747,12 @@ void rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
                         rko->rko_u.node.nodeid   = mdb->id;
                         rd_kafka_q_enq(rkb->rkb_ops, rko);
                 }
-                rd_kafka_broker_destroy(rkb);
         }
+
+        if (rkbp)
+                *rkbp = rkb;
+        else if (rkb)
+                rd_kafka_broker_destroy(rkb);
 }
 
 
@@ -5582,6 +5774,7 @@ const char *rd_kafka_broker_name (rd_kafka_broker_t *rkb) {
 
         return ret[reti];
 }
+
 
 
 /**
@@ -5815,7 +6008,8 @@ static void rd_kafka_broker_handle_purge_queues (rd_kafka_broker_t *rkb,
  * @locks rktp_lock MUST be held
  */
 void rd_kafka_broker_active_toppar_add (rd_kafka_broker_t *rkb,
-                                        rd_kafka_toppar_t *rktp) {
+                                        rd_kafka_toppar_t *rktp,
+                                        const char *reason) {
         int is_consumer = rkb->rkb_rk->rk_type == RD_KAFKA_CONSUMER;
 
         if (is_consumer && rktp->rktp_fetch)
@@ -5832,12 +6026,13 @@ void rd_kafka_broker_active_toppar_add (rd_kafka_broker_t *rkb,
 
         rd_rkb_dbg(rkb, TOPIC, "FETCHADD",
                    "Added %.*s [%"PRId32"] to %s list (%d entries, opv %d, "
-                   "%d messages queued)",
+                   "%d messages queued): %s",
                    RD_KAFKAP_STR_PR(rktp->rktp_rkt->rkt_topic),
                    rktp->rktp_partition,
                    is_consumer ? "fetch" : "active",
                    rkb->rkb_active_toppar_cnt, rktp->rktp_fetch_version,
-                   rd_kafka_msgq_len(&rktp->rktp_msgq));
+                   rd_kafka_msgq_len(&rktp->rktp_msgq),
+                   reason);
 }
 
 
@@ -5848,7 +6043,8 @@ void rd_kafka_broker_active_toppar_add (rd_kafka_broker_t *rkb,
  * Locks: none
  */
 void rd_kafka_broker_active_toppar_del (rd_kafka_broker_t *rkb,
-                                        rd_kafka_toppar_t *rktp) {
+                                        rd_kafka_toppar_t *rktp,
+                                        const char *reason) {
         int is_consumer = rkb->rkb_rk->rk_type == RD_KAFKA_CONSUMER;
 
         if (is_consumer && !rktp->rktp_fetch)
@@ -5870,11 +6066,12 @@ void rd_kafka_broker_active_toppar_del (rd_kafka_broker_t *rkb,
 
         rd_rkb_dbg(rkb, TOPIC, "FETCHADD",
                    "Removed %.*s [%"PRId32"] from %s list "
-                   "(%d entries, opv %d)",
+                   "(%d entries, opv %d): %s",
                    RD_KAFKAP_STR_PR(rktp->rktp_rkt->rkt_topic),
                    rktp->rktp_partition,
                    is_consumer ? "fetch" : "active",
-                   rkb->rkb_active_toppar_cnt, rktp->rktp_fetch_version);
+                   rkb->rkb_active_toppar_cnt, rktp->rktp_fetch_version,
+                   reason);
 
 }
 
@@ -5929,6 +6126,114 @@ rd_kafka_broker_persistent_connection_del (rd_kafka_broker_t *rkb,
 }
 
 
+
+/**
+ * @brief OP_BROKER_MONITOR callback trampoline which
+ *        calls the rkbmon's callback.
+ *
+ * @locality monitoree's op handler thread
+ * @locks none
+ */
+static rd_kafka_op_res_t rd_kafka_broker_monitor_op_cb (rd_kafka_t *rk,
+                                                        rd_kafka_q_t *rkq,
+                                                        rd_kafka_op_t *rko) {
+        if (rko->rko_err != RD_KAFKA_RESP_ERR__DESTROY)
+                rko->rko_u.broker_monitor.cb(rko->rko_u.broker_monitor.rkb);
+        return RD_KAFKA_OP_RES_HANDLED;
+}
+
+/**
+ * @brief Trigger ops for registered monitors when the broker
+ *        state goes from or to UP.
+ *
+ * @locality broker thread
+ * @locks rkb_lock MUST be held
+ */
+static void rd_kafka_broker_trigger_monitors (rd_kafka_broker_t *rkb) {
+        rd_kafka_broker_monitor_t *rkbmon;
+
+        TAILQ_FOREACH(rkbmon, &rkb->rkb_monitors, rkbmon_link) {
+                rd_kafka_op_t *rko = rd_kafka_op_new_cb(
+                        rkb->rkb_rk,
+                        RD_KAFKA_OP_BROKER_MONITOR,
+                        rd_kafka_broker_monitor_op_cb);
+                rd_kafka_broker_keep(rkb);
+                rko->rko_u.broker_monitor.rkb = rkb;
+                rko->rko_u.broker_monitor.cb  = rkbmon->rkbmon_cb;
+                rd_kafka_q_enq(rkbmon->rkbmon_q, rko);
+        }
+}
+
+
+/**
+ * @brief Adds a monitor for when the broker goes up or down.
+ *
+ * The callback will be triggered on the caller's op queue handler thread.
+ *
+ * Use rd_kafka_broker_is_up() in your callback to get the current
+ * state of the broker, since it might have changed since the event
+ * was enqueued.
+ *
+ * @param rkbmon monitoree's monitor.
+ * @param rkb broker to monitor.
+ * @param rkq queue for event op.
+ * @param callback callback to be triggered from \p rkq's op handler.
+ * @opaque opaque passed to callback.
+ *
+ * @locks none
+ * @locality any
+ */
+void rd_kafka_broker_monitor_add (rd_kafka_broker_monitor_t *rkbmon,
+                                  rd_kafka_broker_t *rkb,
+                                  rd_kafka_q_t *rkq,
+                                  void (*callback) (rd_kafka_broker_t *rkb)) {
+        rd_assert(!rkbmon->rkbmon_rkb);
+        rkbmon->rkbmon_rkb    = rkb;
+        rkbmon->rkbmon_q      = rkq;
+        rd_kafka_q_keep(rkbmon->rkbmon_q);
+        rkbmon->rkbmon_cb     = callback;
+
+        rd_kafka_broker_keep(rkb);
+
+        rd_kafka_broker_lock(rkb);
+        TAILQ_INSERT_TAIL(&rkb->rkb_monitors, rkbmon, rkbmon_link);
+        rd_kafka_broker_unlock(rkb);
+}
+
+
+/**
+ * @brief Removes a monitor previously added with
+ *        rd_kafka_broker_monitor_add().
+ *
+ * @warning The rkbmon's callback may still be called after
+ *          _del() has been called due to the buffering nature
+ *          of op queues.
+ *
+ * @locks none
+ * @locality any
+ */
+void rd_kafka_broker_monitor_del (rd_kafka_broker_monitor_t *rkbmon) {
+        rd_kafka_broker_t *rkb = rkbmon->rkbmon_rkb;
+
+        if (!rkb)
+                return;
+
+        rd_kafka_broker_lock(rkb);
+        rkbmon->rkbmon_rkb = NULL;
+        rd_kafka_q_destroy(rkbmon->rkbmon_q);
+        TAILQ_REMOVE(&rkb->rkb_monitors, rkbmon, rkbmon_link);
+        rd_kafka_broker_unlock(rkb);
+
+        rd_kafka_broker_destroy(rkb);
+}
+
+
+
+/**
+ * @name Unit tests
+ * @{
+ *
+ */
 int unittest_broker (void) {
         int fails = 0;
 
@@ -5936,3 +6241,5 @@ int unittest_broker (void) {
 
         return fails;
 }
+
+/**@}*/
