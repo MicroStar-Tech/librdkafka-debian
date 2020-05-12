@@ -7,6 +7,7 @@ Build-Depends: debhelper-compat (= 12),
                liblz4-dev (>= 0.0~r123),
                libsasl2-dev,
                libssl-dev,
+               libzstd-dev,
                python3,
                zlib1g-dev
 Standards-Version: 4.5.0
