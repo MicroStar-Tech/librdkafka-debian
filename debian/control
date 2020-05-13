@@ -3,7 +3,7 @@ Priority: optional
 Maintainer: Faidon Liambotis <paravoid@debian.org>
 Uploaders: Christos Trochalakis <ctrochalakis@debian.org>,
            ChangZhuo Chen (陳昌倬) <czchen@debian.org>
-Build-Depends: debhelper-compat (= 12),
+Build-Depends: debhelper-compat (= 13),
                liblz4-dev (>= 0.0~r123),
                libsasl2-dev,
                libssl-dev,
