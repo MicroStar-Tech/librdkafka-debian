@@ -1,10 +1,11 @@
-librdkafka (1.4.2-1) UNRELEASED; urgency=medium
+librdkafka (1.4.2-1) unstable; urgency=medium
 
   * New upstream release.
-  * Remove upstream applied patches.
   * Add zstd support.
+  * Bump compat to 13.
+  * Remove upstream applied patches.
 
- -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Wed, 13 May 2020 00:00:37 +0800
+ -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Wed, 13 May 2020 11:17:02 +0800
 
 librdkafka (1.3.0-1) unstable; urgency=medium
 
