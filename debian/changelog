@@ -1,8 +1,8 @@
-librdkafka (1.5.0-1) UNRELEASED; urgency=medium
+librdkafka (1.5.0-1) unstable; urgency=medium
 
-  * New upstream version 1.5.0
+  * New upstream release.
 
- -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Wed, 16 Sep 2020 22:46:56 +0800
+ -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Wed, 16 Sep 2020 22:59:26 +0800
 
 librdkafka (1.4.2-1) unstable; urgency=medium
 
