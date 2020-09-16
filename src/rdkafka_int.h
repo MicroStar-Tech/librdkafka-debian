@@ -29,11 +29,14 @@
 #ifndef _RDKAFKA_INT_H_
 #define _RDKAFKA_INT_H_
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 #define _GNU_SOURCE  /* for strndup() */
-#else
+#endif
+
+#ifdef _MSC_VER
 typedef int mode_t;
 #endif
+
 #include <fcntl.h>
 
 
@@ -55,10 +58,6 @@ typedef int mode_t;
 
 
 
-typedef struct rd_kafka_itopic_s rd_kafka_itopic_t;
-typedef struct rd_ikafka_s rd_ikafka_t;
-
-
 #define rd_kafka_assert(rk, cond) do {                                  \
                 if (unlikely(!(cond)))                                  \
                         rd_kafka_crash(__FILE__,__LINE__, __FUNCTION__, \
@@ -74,14 +73,12 @@ rd_kafka_crash (const char *file, int line, const char *function,
 
 /* Forward declarations */
 struct rd_kafka_s;
-struct rd_kafka_itopic_s;
+struct rd_kafka_topic_s;
 struct rd_kafka_msg_s;
 struct rd_kafka_broker_s;
 struct rd_kafka_toppar_s;
 
-typedef RD_SHARED_PTR_TYPE(, struct rd_kafka_toppar_s) shptr_rd_kafka_toppar_t;
-typedef RD_SHARED_PTR_TYPE(, struct rd_kafka_itopic_s) shptr_rd_kafka_itopic_t;
-
+typedef struct rd_kafka_lwtopic_s rd_kafka_lwtopic_t;
 
 
 #include "rdkafka_op.h"
@@ -214,8 +211,6 @@ rd_kafka_txn_state2str (rd_kafka_txn_state_t state) {
  * Kafka handle, internal representation of the application's rd_kafka_t.
  */
 
-typedef RD_SHARED_PTR_TYPE(shptr_rd_ikafka_s, rd_ikafka_t) shptr_rd_ikafka_t;
-
 struct rd_kafka_s {
 	rd_kafka_q_t *rk_rep;   /* kafka -> application reply queue */
 	rd_kafka_q_t *rk_ops;   /* any -> rdkafka main thread ops */
@@ -247,7 +242,7 @@ struct rd_kafka_s {
          * state changes. Protected by rk_broker_state_change_lock. */
         rd_list_t rk_broker_state_change_waiters; /**< (rd_kafka_enq_once_t*) */
 
-	TAILQ_HEAD(, rd_kafka_itopic_s)  rk_topics;
+	TAILQ_HEAD(, rd_kafka_topic_s)  rk_topics;
 	int              rk_topic_cnt;
 
         struct rd_kafka_cgrp_s *rk_cgrp;
@@ -566,6 +561,10 @@ struct rd_kafka_s {
                  *   but no more often than every 10s.
                  *   No locks: only accessed by rdkafka main thread. */
                 rd_interval_t broker_metadata_refresh;
+
+                /**< Suppression for allow.auto.create.topics=false not being
+                 *   supported by the broker. */
+                rd_interval_t allow_auto_create_topics;
         } rk_suppress;
 
         struct {
@@ -816,44 +815,54 @@ const char *rd_kafka_purge_flags2str (int flags);
 #define RD_KAFKA_DBG_ALL            0xfffff
 #define RD_KAFKA_DBG_NONE           0x0
 
+
 void rd_kafka_log0(const rd_kafka_conf_t *conf,
                    const rd_kafka_t *rk, const char *extra, int level,
+                   int ctx,
                    const char *fac, const char *fmt, ...) RD_FORMAT(printf,
-                                                                    6, 7);
+                                                                    7, 8);
 
-#define rd_kafka_log(rk,level,fac,...) \
-        rd_kafka_log0(&rk->rk_conf, rk, NULL, level, fac, __VA_ARGS__)
-#define rd_kafka_dbg(rk,ctx,fac,...) do {                               \
+#define rd_kafka_log(rk,level,fac,...)               \
+        rd_kafka_log0(&rk->rk_conf, rk, NULL, level, \
+                RD_KAFKA_DBG_NONE, fac, __VA_ARGS__)
+
+#define rd_kafka_dbg(rk,ctx,fac,...) do {                                   \
                 if (unlikely((rk)->rk_conf.debug & (RD_KAFKA_DBG_ ## ctx))) \
-                        rd_kafka_log0(&rk->rk_conf,rk,NULL,             \
-                                      LOG_DEBUG,fac,__VA_ARGS__);       \
+                        rd_kafka_log0(&rk->rk_conf,rk,NULL,                 \
+                                      LOG_DEBUG,(RD_KAFKA_DBG_ ## ctx),     \
+                                      fac,__VA_ARGS__);                     \
         } while (0)
 
 /* dbg() not requiring an rk, just the conf object, for early logging */
 #define rd_kafka_dbg0(conf,ctx,fac,...) do {                            \
                 if (unlikely((conf)->debug & (RD_KAFKA_DBG_ ## ctx)))   \
                         rd_kafka_log0(conf,NULL,NULL,                   \
-                                      LOG_DEBUG,fac,__VA_ARGS__);       \
+                                      LOG_DEBUG,(RD_KAFKA_DBG_ ## ctx), \
+                                      fac,__VA_ARGS__);                 \
         } while (0)
 
 /* NOTE: The local copy of _logname is needed due rkb_logname_lock lock-ordering
  *       when logging another broker's name in the message. */
-#define rd_rkb_log(rkb,level,fac,...) do {				\
-		char _logname[RD_KAFKA_NODENAME_SIZE];			\
-                mtx_lock(&(rkb)->rkb_logname_lock);                     \
+#define rd_rkb_log0(rkb,level,ctx,fac,...) do {                           \
+        char _logname[RD_KAFKA_NODENAME_SIZE];                            \
+                mtx_lock(&(rkb)->rkb_logname_lock);                       \
                 rd_strlcpy(_logname, rkb->rkb_logname, sizeof(_logname)); \
-                mtx_unlock(&(rkb)->rkb_logname_lock);                   \
-		rd_kafka_log0(&(rkb)->rkb_rk->rk_conf, \
-                              (rkb)->rkb_rk, _logname,                  \
-                              level, fac, __VA_ARGS__);                 \
+                mtx_unlock(&(rkb)->rkb_logname_lock);                     \
+        rd_kafka_log0(&(rkb)->rkb_rk->rk_conf,                            \
+                              (rkb)->rkb_rk, _logname,                    \
+                              level, ctx, fac, __VA_ARGS__);              \
         } while (0)
 
-#define rd_rkb_dbg(rkb,ctx,fac,...) do {				\
-		if (unlikely((rkb)->rkb_rk->rk_conf.debug &		\
-			     (RD_KAFKA_DBG_ ## ctx))) {			\
-			rd_rkb_log(rkb, LOG_DEBUG, fac, __VA_ARGS__);	\
-                }                                                       \
-	} while (0)
+#define rd_rkb_log(rkb,level,fac,...) \
+        rd_rkb_log0(rkb,level,RD_KAFKA_DBG_NONE,fac, __VA_ARGS__)
+
+#define rd_rkb_dbg(rkb,ctx,fac,...) do {                       \
+        if (unlikely((rkb)->rkb_rk->rk_conf.debug &            \
+                 (RD_KAFKA_DBG_ ## ctx))) {                    \
+            rd_rkb_log0(rkb, LOG_DEBUG,(RD_KAFKA_DBG_ ## ctx), \
+                    fac, __VA_ARGS__);                         \
+                }                                              \
+        } while (0)
 
 
 
@@ -910,7 +919,7 @@ rd_kafka_op_res_t
 rd_kafka_poll_cb (rd_kafka_t *rk, rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
                   rd_kafka_q_cb_type_t cb_type, void *opaque);
 
-rd_kafka_resp_err_t rd_kafka_subscribe_rkt (rd_kafka_itopic_t *rkt);
+rd_kafka_resp_err_t rd_kafka_subscribe_rkt (rd_kafka_topic_t *rkt);
 
 
 /**

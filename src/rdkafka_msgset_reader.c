@@ -165,6 +165,7 @@ typedef struct rd_kafka_msgset_reader_s {
         const struct rd_kafka_toppar_ver *msetr_tver; /**< Toppar op version of
                                                        *   request. */
 
+        int32_t            msetr_broker_id; /**< Broker id (of msetr_rkb) */
         rd_kafka_broker_t *msetr_rkb;    /* @warning Not a refcounted
                                           *          reference! */
         rd_kafka_toppar_t *msetr_rktp;   /* @warning Not a refcounted
@@ -224,6 +225,7 @@ rd_kafka_msgset_reader_init (rd_kafka_msgset_reader_t *msetr,
         memset(msetr, 0, sizeof(*msetr));
 
         msetr->msetr_rkb        = rkbuf->rkbuf_rkb;
+        msetr->msetr_broker_id  = rd_kafka_broker_id(msetr->msetr_rkb);
         msetr->msetr_rktp       = rktp;
         msetr->msetr_aborted_txns = aborted_txns;
         msetr->msetr_tver       = tver;
@@ -517,11 +519,13 @@ rd_kafka_msgset_reader_decompress (rd_kafka_msgset_reader_t *msetr,
  err:
         /* Enqueue error messsage:
          * Create op and push on temporary queue. */
-        rd_kafka_q_op_err(&msetr->msetr_rkq, RD_KAFKA_OP_CONSUMER_ERR,
-                          err, msetr->msetr_tver->version, rktp, Offset,
-                          "Decompression (codec 0x%x) of message at %"PRIu64
-                          " of %"PRIusz" bytes failed: %s",
-                          codec, Offset, compressed_size, rd_kafka_err2str(err));
+        rd_kafka_consumer_err(&msetr->msetr_rkq, msetr->msetr_broker_id,
+                              err, msetr->msetr_tver->version,
+                              NULL, rktp, Offset,
+                              "Decompression (codec 0x%x) of message at %"PRIu64
+                              " of %"PRIusz" bytes failed: %s",
+                              codec, Offset, compressed_size,
+                              rd_kafka_err2str(err));
 
         return err;
 
@@ -609,19 +613,20 @@ rd_kafka_msgset_reader_msg_v0_1 (rd_kafka_msgset_reader_t *msetr) {
                 if (unlikely(hdr.Crc != calc_crc)) {
                         /* Propagate CRC error to application and
                          * continue with next message. */
-                        rd_kafka_q_op_err(&msetr->msetr_rkq,
-                                          RD_KAFKA_OP_CONSUMER_ERR,
-                                          RD_KAFKA_RESP_ERR__BAD_MSG,
-                                          msetr->msetr_tver->version,
-                                          rktp,
-                                          hdr.Offset,
-                                          "Message at %soffset %"PRId64
-                                          " (%"PRId32" bytes) "
-                                          "failed CRC32 check "
-                                          "(original 0x%"PRIx32" != "
-                                          "calculated 0x%"PRIx32")",
-                                          reloff_str, hdr.Offset,
-                                          hdr.MessageSize, hdr.Crc, calc_crc);
+                        rd_kafka_consumer_err(&msetr->msetr_rkq,
+                                              msetr->msetr_broker_id,
+                                              RD_KAFKA_RESP_ERR__BAD_MSG,
+                                              msetr->msetr_tver->version,
+                                              NULL, rktp,
+                                              hdr.Offset,
+                                              "Message at %soffset %"PRId64
+                                              " (%"PRId32" bytes) "
+                                              "failed CRC32 check "
+                                              "(original 0x%"PRIx32" != "
+                                              "calculated 0x%"PRIx32")",
+                                              reloff_str, hdr.Offset,
+                                              hdr.MessageSize,
+                                              hdr.Crc, calc_crc);
                         rd_kafka_buf_skip_to(rkbuf, message_end);
                         rd_atomic64_add(&rkb->rkb_c.rx_err, 1);
                         /* Continue with next message */
@@ -676,6 +681,8 @@ rd_kafka_msgset_reader_msg_v0_1 (rd_kafka_msgset_reader_t *msetr) {
                                         (size_t)RD_KAFKAP_BYTES_LEN(&Value),
                                         RD_KAFKAP_BYTES_IS_NULL(&Value) ?
                                         NULL : Value.data);
+
+        rkm->rkm_broker_id = msetr->msetr_broker_id;
 
         /* Assign message timestamp.
          * If message was in a compressed MessageSet and the outer/wrapper
@@ -894,6 +901,8 @@ unexpected_abort_txn:
                                         RD_KAFKAP_BYTES_IS_NULL(&hdr.Value) ?
                                         NULL : hdr.Value.data);
 
+        rkm->rkm_broker_id = msetr->msetr_broker_id;
+
         /* Store pointer to unparsed message headers, they will
          * be parsed on the first access.
          * This pointer points to the rkbuf payload.
@@ -1001,19 +1010,19 @@ rd_kafka_msgset_reader_v2 (rd_kafka_msgset_reader_t *msetr) {
                 if (unlikely((uint32_t)hdr.Crc != calc_crc)) {
                         /* Propagate CRC error to application and
                          * continue with next message. */
-                        rd_kafka_q_op_err(&msetr->msetr_rkq,
-                                          RD_KAFKA_OP_CONSUMER_ERR,
-                                          RD_KAFKA_RESP_ERR__BAD_MSG,
-                                          msetr->msetr_tver->version,
-                                          rktp,
-                                          hdr.BaseOffset,
-                                          "MessageSet at offset %"PRId64
-                                          " (%"PRId32" bytes) "
-                                          "failed CRC32C check "
-                                          "(original 0x%"PRIx32" != "
-                                          "calculated 0x%"PRIx32")",
-                                          hdr.BaseOffset,
-                                          hdr.Length, hdr.Crc, calc_crc);
+                        rd_kafka_consumer_err(&msetr->msetr_rkq,
+                                              msetr->msetr_broker_id,
+                                              RD_KAFKA_RESP_ERR__BAD_MSG,
+                                              msetr->msetr_tver->version,
+                                              NULL, rktp,
+                                              hdr.BaseOffset,
+                                              "MessageSet at offset %"PRId64
+                                              " (%"PRId32" bytes) "
+                                              "failed CRC32C check "
+                                              "(original 0x%"PRIx32" != "
+                                              "calculated 0x%"PRIx32")",
+                                              hdr.BaseOffset,
+                                              hdr.Length, hdr.Crc, calc_crc);
                         rd_kafka_buf_skip_to(rkbuf, crc_len);
                         rd_atomic64_add(&msetr->msetr_rkb->rkb_c.rx_err, 1);
                         return RD_KAFKA_RESP_ERR_NO_ERROR;
@@ -1183,11 +1192,11 @@ rd_kafka_msgset_reader_peek_msg_version (rd_kafka_msgset_reader_t *msetr,
                            read_offset, rd_slice_size(&rkbuf->rkbuf_reader));
 
                 if (Offset >= msetr->msetr_rktp->rktp_offsets.fetch_offset) {
-                        rd_kafka_q_op_err(
+                        rd_kafka_consumer_err(
                                 &msetr->msetr_rkq,
-                                RD_KAFKA_OP_CONSUMER_ERR,
+                                msetr->msetr_broker_id,
                                 RD_KAFKA_RESP_ERR__NOT_IMPLEMENTED,
-                                msetr->msetr_tver->version, rktp, Offset,
+                                msetr->msetr_tver->version, NULL, rktp, Offset,
                                 "Unsupported Message(Set) MagicByte %d "
                                 "at offset %"PRId64,
                                 (int)*MagicBytep, Offset);
@@ -1331,12 +1340,12 @@ rd_kafka_msgset_reader_run (rd_kafka_msgset_reader_t *msetr) {
                                    rktp->rktp_partition,
                                    rktp->rktp_fetch_msg_max_bytes);
                 } else if (!err) {
-                        rd_kafka_q_op_err(
+                        rd_kafka_consumer_err(
                                 &msetr->msetr_rkq,
-                                RD_KAFKA_OP_CONSUMER_ERR,
+                                msetr->msetr_broker_id,
                                 RD_KAFKA_RESP_ERR_MSG_SIZE_TOO_LARGE,
                                 msetr->msetr_tver->version,
-                                rktp,
+                                NULL, rktp,
                                 rktp->rktp_offsets.fetch_offset,
                                 "Message at offset %"PRId64" "
                                 "might be too large to fetch, try increasing "

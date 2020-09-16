@@ -100,6 +100,10 @@ set(
     0105-transactions_mock.c
     0106-cgrp_sess_timeout.c
     0107-topic_recreate.c
+    0109-auto_create_topics.cpp
+    0110-batch_size.cpp
+    0111-delay_create_topics.cpp
+    0112-assign_unknown_part.c
     8000-idle.cpp
     test.c
     testcpp.cpp

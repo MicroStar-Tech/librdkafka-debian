@@ -33,6 +33,12 @@
 #error "rdkafka_mock.h must be included after rdkafka.h"
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#if 0
+} /* Restore indent */
+#endif
+#endif
 
 
 /**
@@ -136,6 +142,18 @@ RD_EXPORT
 void rd_kafka_mock_push_request_errors (rd_kafka_mock_cluster_t *mcluster,
                                         int16_t ApiKey, size_t cnt, ...);
 
+
+/**
+ * @brief Same as rd_kafka_mock_push_request_errors() but for a specific broker.
+ *
+ * @remark The broker errors take precedence over the cluster errors.
+ */
+RD_EXPORT rd_kafka_resp_err_t
+rd_kafka_mock_broker_push_request_errors (rd_kafka_mock_cluster_t *mcluster,
+                                          int32_t broker_id,
+                                          int16_t ApiKey, size_t cnt, ...);
+
+
 /**
  * @brief Set the topic error to return in protocol requests.
  *
@@ -219,6 +237,12 @@ rd_kafka_mock_broker_set_up (rd_kafka_mock_cluster_t *mcluster,
                              int32_t broker_id);
 
 
+/**
+ * @brief Set broker round-trip-time delay in milliseconds.
+ */
+RD_EXPORT rd_kafka_resp_err_t
+rd_kafka_mock_broker_set_rtt (rd_kafka_mock_cluster_t *mcluster,
+                              int32_t broker_id, int rtt_ms);
 
 /**
  * @brief Sets the broker's rack as reported in Metadata to the client.
@@ -265,4 +289,7 @@ rd_kafka_mock_set_apiversion (rd_kafka_mock_cluster_t *mcluster,
 
 /**@}*/
 
+#ifdef __cplusplus
+}
+#endif
 #endif /* _RDKAFKA_MOCK_H_ */

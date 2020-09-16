@@ -40,7 +40,7 @@ extern "C" {
 #include "../src/rdkafka.h"
 }
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 /* Visual Studio */
 #include "../src/win32_config.h"
 #else
@@ -133,15 +133,15 @@ class ErrorImpl : public Error {
   }
 
   bool is_fatal () const {
-    return rd_kafka_error_is_fatal(c_error_);
+    return !!rd_kafka_error_is_fatal(c_error_);
   }
 
   bool is_retriable () const {
-    return rd_kafka_error_is_retriable(c_error_);
+    return !!rd_kafka_error_is_retriable(c_error_);
   }
 
   bool txn_requires_abort () const {
-    return rd_kafka_error_txn_requires_abort(c_error_);
+    return !!rd_kafka_error_txn_requires_abort(c_error_);
   }
 
   rd_kafka_error_t *c_error_;
@@ -436,6 +436,11 @@ class MessageImpl : public Message {
 
     return headers_;
   }
+
+  int32_t broker_id () const {
+    return rd_kafka_message_broker_id(rkmessage_);
+  }
+
 
   RdKafka::Topic *topic_;
   rd_kafka_message_t *rkmessage_;
@@ -875,7 +880,7 @@ class HandleImpl : virtual public Handle {
   int poll (int timeout_ms) { return rd_kafka_poll(rk_, timeout_ms); };
   int outq_len () { return rd_kafka_outq_len(rk_); };
 
-  void set_common_config (RdKafka::ConfImpl *confimpl);
+  void set_common_config (const RdKafka::ConfImpl *confimpl);
 
   RdKafka::ErrorCode metadata (bool all_topics,const Topic *only_rkt,
             Metadata **metadatap, int timeout_ms);
@@ -936,7 +941,7 @@ class HandleImpl : virtual public Handle {
           return rd_kafka_controllerid(rk_, timeout_ms);
   }
 
-  ErrorCode fatal_error (std::string &errstr) {
+  ErrorCode fatal_error (std::string &errstr) const {
           char errbuf[512];
           RdKafka::ErrorCode err =
                   static_cast<RdKafka::ErrorCode>(

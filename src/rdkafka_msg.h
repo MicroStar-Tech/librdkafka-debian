@@ -100,6 +100,8 @@ typedef struct rd_kafka_msg_s {
                                            *   the ProduceResponse handler:
                                            *   this value is always up to date.
                                            */
+        int32_t rkm_broker_id;            /**< Broker message was produced to
+                                           *   or fetched from. */
 
         union {
                 struct {
@@ -225,7 +227,7 @@ size_t rd_kafka_msgq_size (const rd_kafka_msgq_t *rkmq) {
 
 void rd_kafka_msg_destroy (rd_kafka_t *rk, rd_kafka_msg_t *rkm);
 
-int rd_kafka_msg_new (rd_kafka_itopic_t *rkt, int32_t force_partition,
+int rd_kafka_msg_new (rd_kafka_topic_t *rkt, int32_t force_partition,
 		      int msgflags,
 		      char *payload, size_t len,
 		      const void *keydata, size_t keylen,
@@ -425,7 +427,7 @@ rd_kafka_msgq_enq_sorted0 (rd_kafka_msgq_t *rkmq,
  * @warning The message must have a msgid set.
  * @returns the message count of the queue after enqueuing the message.
  */
-int rd_kafka_msgq_enq_sorted (const rd_kafka_itopic_t *rkt,
+int rd_kafka_msgq_enq_sorted (const rd_kafka_topic_t *rkt,
                               rd_kafka_msgq_t *rkmq,
                               rd_kafka_msg_t *rkm);
 
@@ -494,7 +496,7 @@ rd_kafka_msg_t *rd_kafka_msgq_find_pos (const rd_kafka_msgq_t *rkmq,
                                                     const void *),
                                         int *cntp, int64_t *bytesp);
 
-void rd_kafka_msgq_set_metadata (rd_kafka_msgq_t *rkmq,
+void rd_kafka_msgq_set_metadata (rd_kafka_msgq_t *rkmq, int32_t broker_id,
                                  int64_t base_offset, int64_t timestamp,
                                  rd_kafka_msg_status_t status);
 
@@ -502,7 +504,7 @@ void rd_kafka_msgq_move_acked (rd_kafka_msgq_t *dest, rd_kafka_msgq_t *src,
                                uint64_t last_msgid,
                                rd_kafka_msg_status_t status);
 
-int rd_kafka_msg_partitioner (rd_kafka_itopic_t *rkt, rd_kafka_msg_t *rkm,
+int rd_kafka_msg_partitioner (rd_kafka_topic_t *rkt, rd_kafka_msg_t *rkm,
                               rd_dolock_t do_lock);
 
 

@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #include <direct.h> /* _getcwd */
 #else
 #include <sys/wait.h> /* waitpid */
@@ -141,6 +141,7 @@ _TEST_DECL(0036_partial_fetch);
 _TEST_DECL(0037_destroy_hang_local);
 _TEST_DECL(0038_performance);
 _TEST_DECL(0039_event_dr);
+_TEST_DECL(0039_event_log);
 _TEST_DECL(0039_event);
 _TEST_DECL(0040_io_event);
 _TEST_DECL(0041_fetch_max_bytes);
@@ -213,6 +214,10 @@ _TEST_DECL(0104_fetch_from_follower_mock);
 _TEST_DECL(0105_transactions_mock);
 _TEST_DECL(0106_cgrp_sess_timeout);
 _TEST_DECL(0107_topic_recreate);
+_TEST_DECL(0109_auto_create_topics);
+_TEST_DECL(0110_batch_size);
+_TEST_DECL(0111_delay_create_topics);
+_TEST_DECL(0112_assign_unknown_part);
 
 /* Manual tests */
 _TEST_DECL(8000_idle);
@@ -293,6 +298,7 @@ struct test tests[] = {
               /* Produces and consumes a lot of messages */
               _THRES(.ucpu = 150.0, .scpu = 10)),
 	_TEST(0039_event_dr, 0),
+        _TEST(0039_event_log, TEST_F_LOCAL),
         _TEST(0039_event, TEST_F_LOCAL),
 	_TEST(0040_io_event, 0, TEST_BRKVER(0,9,0,0)),
 	_TEST(0041_fetch_max_bytes, 0,
@@ -394,6 +400,11 @@ struct test tests[] = {
         _TEST(0106_cgrp_sess_timeout, TEST_F_LOCAL, TEST_BRKVER(0,11,0,0)),
         _TEST(0107_topic_recreate, 0, TEST_BRKVER_TOPIC_ADMINAPI,
               .scenario = "noautocreate"),
+        _TEST(0109_auto_create_topics, 0),
+        _TEST(0110_batch_size, 0),
+        _TEST(0111_delay_create_topics, 0, TEST_BRKVER_TOPIC_ADMINAPI,
+              .scenario = "noautocreate"),
+        _TEST(0112_assign_unknown_part, 0),
 
         /* Manual tests */
         _TEST(8000_idle, TEST_F_MANUAL),
@@ -497,7 +508,7 @@ static int test_closesocket_cb (int s, void *opaque) {
                 sockem_close(skm);
                 test_socket_del(test, skm, 0/*nolock*/);
         } else {
-#ifdef _MSC_VER
+#ifdef _WIN32
                 closesocket(s);
 #else
                 close(s);
@@ -584,7 +595,7 @@ int tmout_multip (int msecs) {
 
 
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 static void test_init_win32 (void) {
         /* Enable VT emulation to support colored output. */
         HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -634,7 +645,7 @@ static void test_init (void) {
                 }
         }
 
-#ifdef _MSC_VER
+#ifdef _WIN32
         test_init_win32();
 	{
 		LARGE_INTEGER cycl;
@@ -709,7 +720,7 @@ static void test_read_conf_file (const char *conf_path,
 	char buf[1024];
 	int line = 0;
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 	fp = fopen(conf_path, "r");
 #else
 	fp = NULL;
@@ -853,7 +864,7 @@ void test_conf_init (rd_kafka_conf_t **conf, rd_kafka_topic_conf_t **topic_conf,
 
 static RD_INLINE unsigned int test_rand(void) {
 	unsigned int r;
-#if _MSC_VER
+#ifdef _WIN32
 	rand_s(&r);
 #else
 	r = rand();
@@ -1037,7 +1048,7 @@ static int run_test0 (struct run_args *run_args) {
                 test->stats_fp = NULL;
                 /* Delete file if nothing was written */
                 if (pos == 0) {
-#ifndef _MSC_VER
+#ifndef _WIN32
                         unlink(stats_file);
 #else
                         _unlink(stats_file);
@@ -1099,7 +1110,7 @@ static void check_test_timeouts (void) {
                                    1000000);
                         test_curr = save_test;
                         tests_running_cnt--; /* fail-later misses this*/
-#ifdef _MSC_VER
+#ifdef _WIN32
                         TerminateThread(test->thrd, -1);
 #else
                         pthread_kill(test->thrd, SIGKILL);
@@ -1275,7 +1286,7 @@ static int test_summary (int do_lock) {
                 TEST_LOCK();
 
 	if (test_sql_cmd) {
-#ifdef _MSC_VER
+#ifdef _WIN32
 		sql_fp = _popen(test_sql_cmd, "w");
 #else
 		sql_fp = popen(test_sql_cmd, "w");
@@ -1440,7 +1451,7 @@ static int test_summary (int do_lock) {
         return tests_failed - tests_failed_known;
 }
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 static void test_sig_term (int sig) {
 	if (test_exit)
 		exit(1);
@@ -1512,7 +1523,7 @@ int main(int argc, char **argv) {
 
         test_init();
 
-#ifndef _MSC_VER
+#ifndef _WIN32
         signal(SIGINT, test_sig_term);
 #endif
         tests_to_run = test_getenv("TESTS", NULL);
@@ -1555,7 +1566,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "-V") && i+1 < argc)
  			test_broker_version_str = argv[++i];
                 else if (!strcmp(argv[i], "-s") && i+1 < argc)
-                        strncpy(test_scenario, argv[i],
+                        strncpy(test_scenario, argv[++i],
                                 sizeof(test_scenario)-1);
 		else if (!strcmp(argv[i], "-S"))
 			show_summary = 0;
@@ -1675,7 +1686,10 @@ int main(int argc, char **argv) {
                 test_timeout_multiplier += (double)test_concurrent_max / 3;
 
 	TEST_SAY("Tests to run : %s\n", tests_to_run ? tests_to_run : "all");
-	TEST_SAY("Test mode    : %s%s\n", test_quick ? "quick, ":"", test_mode);
+        TEST_SAY("Test mode    : %s%s%s\n",
+                 test_quick ? "quick, ":"",
+                 test_mode,
+                 test_on_ci ? ", CI":"");
         TEST_SAY("Test scenario: %s\n", test_scenario);
         TEST_SAY("Test filter  : %s\n",
                  (test_flags & TEST_F_LOCAL) ? "local tests only" : "no filter");
@@ -1690,7 +1704,7 @@ int main(int argc, char **argv) {
 
         {
                 char cwd[512], *pcwd;
-#ifdef _MSC_VER
+#ifdef _WIN32
                 pcwd = _getcwd(cwd, sizeof(cwd) - 1);
 #else
                 pcwd = getcwd(cwd, sizeof(cwd) - 1);
@@ -2601,6 +2615,29 @@ void test_consumer_assign_partition (const char *what, rd_kafka_t *rk,
 }
 
 
+void test_consumer_pause_resume_partition (rd_kafka_t *rk,
+                                           const char *topic, int32_t partition,
+                                           rd_bool_t pause) {
+        rd_kafka_topic_partition_list_t *part;
+        rd_kafka_resp_err_t err;
+
+        part = rd_kafka_topic_partition_list_new(1);
+        rd_kafka_topic_partition_list_add(part, topic, partition);
+
+        if (pause)
+                err = rd_kafka_pause_partitions(rk, part);
+        else
+                err = rd_kafka_resume_partitions(rk, part);
+
+        TEST_ASSERT(!err, "Failed to %s %s [%"PRId32"]: %s",
+                    pause ? "pause":"resume",
+                    topic, partition,
+                    rd_kafka_err2str(err));
+
+        rd_kafka_topic_partition_list_destroy(part);
+}
+
+
 /**
  * Message verification services
  *
@@ -2764,7 +2801,7 @@ int test_msgver_add_msg00 (const char *func, int line, const char *clientname,
                            test_msgver_t *mv,
                            uint64_t testid,
                            const char *topic, int32_t partition,
-                           int64_t offset, int64_t timestamp,
+                           int64_t offset, int64_t timestamp, int32_t broker_id,
                            rd_kafka_resp_err_t err, int msgnum) {
         struct test_mv_p *p;
         struct test_mv_m *m;
@@ -2787,14 +2824,15 @@ int test_msgver_add_msg00 (const char *func, int line, const char *clientname,
         m->offset = offset;
         m->msgid  = msgnum;
         m->timestamp = timestamp;
+        m->broker_id = broker_id;
 
         if (test_level > 2) {
                 TEST_SAY("%s:%d: %s: "
                          "Recv msg %s [%"PRId32"] offset %"PRId64" msgid %d "
-                         "timestamp %"PRId64"\n",
+                         "timestamp %"PRId64" broker %"PRId32"\n",
                          func, line, clientname,
                          p->topic, p->partition, m->offset, m->msgid,
-                         m->timestamp);
+                         m->timestamp, m->broker_id);
         }
 
         mv->msgcnt++;
@@ -2874,6 +2912,7 @@ int test_msgver_add_msg0 (const char *func, int line, const char *clientname,
                                      rkmessage->partition,
                                      rkmessage->offset,
                                      rd_kafka_message_timestamp(rkmessage, NULL),
+                                     rd_kafka_message_broker_id(rkmessage),
                                      rkmessage->err,
                                      in_msgnum);
         return 1;
@@ -2914,8 +2953,20 @@ static int test_mv_mvec_verify_order (test_msgver_t *mv, int flags,
 				prev->offset, this->offset,
 				prev->msgid, this->msgid);
 			fails++;
-		}
-	}
+                } else if ((flags & TEST_MSGVER_BY_BROKER_ID) &&
+                           this->broker_id != vs->broker_id) {
+                        TEST_MV_WARN(
+                                mv,
+                                " %s [%"PRId32"] msg rcvidx #%d/%d: "
+                                "broker id mismatch: expected %"PRId32
+                                ", not %"PRId32"\n",
+                                p ? p->topic : "*",
+                                p ? p->partition : -1,
+                                mi, mvec->cnt,
+                                vs->broker_id, this->broker_id);
+                        fails++;
+                }
+        }
 
 	return fails;
 }
@@ -2987,20 +3038,24 @@ static int test_mv_mvec_verify_corr (test_msgver_t *mv, int flags,
                     ((flags & TEST_MSGVER_BY_MSGID) &&
                      this->msgid != corr->msgid) ||
                     ((flags & TEST_MSGVER_BY_TIMESTAMP) &&
-                     this->timestamp != corr->timestamp)) {
+                     this->timestamp != corr->timestamp) ||
+                    ((flags & TEST_MSGVER_BY_BROKER_ID) &&
+                     this->broker_id != corr->broker_id)) {
                         TEST_MV_WARN(
                                 mv,
                                 " %s [%"PRId32"] msg rcvidx #%d/%d: "
                                 "did not match correct msg: "
                                 "offset %"PRId64" vs %"PRId64", "
                                 "msgid %d vs %d, "
-                                "timestamp %"PRId64" vs %"PRId64" (fl 0x%x)\n",
+                                "timestamp %"PRId64" vs %"PRId64", "
+                                "broker %"PRId32" vs %"PRId32" (fl 0x%x)\n",
                                 p ? p->topic : "*",
                                 p ? p->partition : -1,
                                 mi, mvec->cnt,
                                 this->offset, corr->offset,
                                 this->msgid, corr->msgid,
                                 this->timestamp, corr->timestamp,
+                                this->broker_id, corr->broker_id,
                                 flags);
                         fails++;
                 } else {
@@ -3154,6 +3209,20 @@ static int test_mv_mvec_verify_range (test_msgver_t *mv, int flags,
                                         vs->timestamp_min, vs->timestamp_max);
                                 fails++;
                         }
+                }
+
+                if ((flags & TEST_MSGVER_BY_BROKER_ID) &&
+                    this->broker_id != vs->broker_id) {
+                        TEST_MV_WARN(
+                                mv,
+                                " %s [%"PRId32"] range check: "
+                                "msgid #%d (at mi %d): "
+                                "expected broker id %"PRId32", not %"PRId32"\n",
+                                p ? p->topic : "*",
+                                p ? p->partition : -1,
+                                this->msgid, mi,
+                                vs->broker_id, this->broker_id);
+                                fails++;
                 }
 
                 if (cnt++ == 0) {
@@ -3861,11 +3930,55 @@ void test_print_partition_list (const rd_kafka_topic_partition_list_t
         }
 }
 
+
+/**
+ * @brief Execute script from the Kafka distribution bin/ path.
+ */
+void test_kafka_cmd (const char *fmt, ...) {
+#ifdef _WIN32
+	TEST_FAIL("%s not supported on Windows, yet", __FUNCTION__);
+#else
+	char cmd[1024];
+	int r;
+	va_list ap;
+	test_timing_t t_cmd;
+	const char *kpath;
+
+	kpath = test_getenv("KAFKA_PATH", NULL);
+
+	if (!kpath)
+		TEST_FAIL("%s: KAFKA_PATH must be set",
+			  __FUNCTION__);
+
+	r = rd_snprintf(cmd, sizeof(cmd),
+			"%s/bin/", kpath);
+	TEST_ASSERT(r < (int)sizeof(cmd));
+
+	va_start(ap, fmt);
+	rd_vsnprintf(cmd+r, sizeof(cmd)-r, fmt, ap);
+	va_end(ap);
+
+	TEST_SAY("Executing: %s\n", cmd);
+	TIMING_START(&t_cmd, "exec");
+	r = system(cmd);
+	TIMING_STOP(&t_cmd);
+
+	if (r == -1)
+		TEST_FAIL("system(\"%s\") failed: %s", cmd, strerror(errno));
+	else if (WIFSIGNALED(r))
+		TEST_FAIL("system(\"%s\") terminated by signal %d\n", cmd,
+			  WTERMSIG(r));
+	else if (WEXITSTATUS(r))
+		TEST_FAIL("system(\"%s\") failed with exit status %d\n",
+			  cmd, WEXITSTATUS(r));
+#endif
+}
+
 /**
  * @brief Execute kafka-topics.sh from the Kafka distribution.
  */
 void test_kafka_topics (const char *fmt, ...) {
-#ifdef _MSC_VER
+#ifdef _WIN32
 	TEST_FAIL("%s not supported on Windows, yet", __FUNCTION__);
 #else
 	char cmd[512];
@@ -4342,7 +4455,7 @@ int test_check_auto_create_topic (void) {
  * @returns -1 if the application could not be started, else the pid.
  */
 int test_run_java (const char *cls, const char **argv) {
-#ifdef _MSC_VER
+#ifdef _WIN32
         TEST_WARN("%s(%s) not supported Windows, yet",
                   __FUNCTION__, cls);
         return -1;
@@ -4416,7 +4529,7 @@ int test_run_java (const char *cls, const char **argv) {
  * @returns -1 if the child process exited successfully, else -1.
  */
 int test_waitpid (int pid) {
-#ifdef _MSC_VER
+#ifdef _WIN32
         TEST_WARN("%s() not supported Windows, yet",
                   __FUNCTION__);
         return -1;
@@ -4527,7 +4640,7 @@ int test_can_create_topics (int skip) {
         if (test_broker_version >= TEST_BRKVER(0,10,2,0))
                 return 1;
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 	if (skip)
 		TEST_SKIP("Cannot create topics on Win32\n");
 	return 0;
@@ -4843,8 +4956,6 @@ void test_wait_metadata_update (rd_kafka_t *rk,
 
         abs_timeout = test_clock() + (tmout * 1000);
 
-        test_timeout_set(10 + (tmout/1000));
-
         TEST_SAY("Waiting for up to %dms for metadata update\n", tmout);
 
         TIMING_START(&t_md, "METADATA.WAIT");
@@ -4869,6 +4980,15 @@ void test_wait_metadata_update (rd_kafka_t *rk,
 
         if (abs_timeout)
                 TEST_FAIL("Expected topics not seen in given time.");
+}
+
+/**
+ * @brief Wait for topic to be available in metadata
+ */
+void test_wait_topic_exists (rd_kafka_t *rk, const char *topic, int tmout) {
+        rd_kafka_metadata_topic_t topics = { .topic = (char *)topic };
+
+        test_wait_metadata_update(rk, &topics, 1, NULL, 0, tmout);
 }
 
 
@@ -5132,8 +5252,6 @@ test_CreatePartitions_simple (rd_kafka_t *rk,
         rd_kafka_AdminOptions_set_opaque(options, opaque);
 
         if (!useq) {
-                char errstr[512];
-
                 err = rd_kafka_AdminOptions_set_request_timeout(options,
                                                                 tmout,
                                                                 errstr,
@@ -5548,7 +5666,9 @@ void test_fail0 (const char *file, int line, const char *function,
         char timestr[32];
         time_t tnow = time(NULL);
 
-#ifdef _MSC_VER
+#ifdef __MINGW32__
+        strftime(timestr, sizeof(timestr), "%a %b %d %H:%M:%S %Y", localtime(&tnow));
+#elif defined(_WIN32)
         ctime_s(timestr, sizeof(timestr), &tnow);
 #else
         ctime_r(&tnow, timestr);
