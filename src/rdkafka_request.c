@@ -448,8 +448,14 @@ rd_kafka_resp_err_t rd_kafka_handle_Offset (rd_kafka_t *rk,
                 RD_KAFKA_ERR_ACTION_PERMANENT,
                 RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART,
 
-                RD_KAFKA_ERR_ACTION_REFRESH|RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_ERR_ACTION_REFRESH,
                 RD_KAFKA_RESP_ERR_NOT_LEADER_FOR_PARTITION,
+
+                RD_KAFKA_ERR_ACTION_REFRESH,
+                RD_KAFKA_RESP_ERR_REPLICA_NOT_AVAILABLE,
+
+                RD_KAFKA_ERR_ACTION_REFRESH|RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR_LEADER_NOT_AVAILABLE,
 
                 RD_KAFKA_ERR_ACTION_END);
 
@@ -459,8 +465,8 @@ rd_kafka_resp_err_t rd_kafka_handle_Offset (rd_kafka_t *rk,
                 rd_snprintf(tmp, sizeof(tmp),
                             "OffsetRequest failed: %s",
                             rd_kafka_err2str(ErrorCode));
-                rd_kafka_metadata_refresh_known_topics(rk, NULL, 1/*force*/,
-                                                       tmp);
+                rd_kafka_metadata_refresh_known_topics(rk, NULL,
+                                                       rd_true/*force*/, tmp);
         }
 
         if (actions & RD_KAFKA_ERR_ACTION_RETRY) {
@@ -607,7 +613,7 @@ rd_kafka_handle_OffsetFetch (rd_kafka_t *rk,
 
                 for (j = 0 ; j < PartArrayCnt ; j++) {
                         int32_t partition;
-                        shptr_rd_kafka_toppar_t *s_rktp;
+                        rd_kafka_toppar_t *rktp;
                         rd_kafka_topic_partition_t *rktpar;
                         int16_t err2;
 
@@ -629,12 +635,12 @@ rd_kafka_handle_OffsetFetch (rd_kafka_t *rk,
 
                         seen_cnt++;
 
-			if (!(s_rktp = rktpar->_private)) {
-				s_rktp = rd_kafka_toppar_get2(rkb->rkb_rk,
-							      topic_name,
-							      partition, 0, 0);
+			if (!(rktp = rktpar->_private)) {
+				rktp = rd_kafka_toppar_get2(rkb->rkb_rk,
+                                                            topic_name,
+                                                            partition, 0, 0);
 				/* May be NULL if topic is not locally known */
-				rktpar->_private = s_rktp;
+				rktpar->_private = rktp;
 			}
 
 			/* broker reports invalid offset as -1 */
@@ -650,8 +656,7 @@ rd_kafka_handle_OffsetFetch (rd_kafka_t *rk,
                                    topic_name, partition, offset,
                                    RD_KAFKAP_STR_LEN(&metadata));
 
-			if (update_toppar && !err2 && s_rktp) {
-				rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(s_rktp);
+			if (update_toppar && !err2 && rktp) {
 				/* Update toppar's committed offset */
 				rd_kafka_toppar_lock(rktp);
 				rktp->rktp_committed_offset = rktpar->offset;
@@ -761,8 +766,7 @@ void rd_kafka_op_handle_OffsetFetch (rd_kafka_t *rk,
         rko_reply->rko_u.offset_fetch.partitions = offsets;
         rko_reply->rko_u.offset_fetch.do_free = 1;
 	if (rko->rko_rktp)
-		rko_reply->rko_rktp = rd_kafka_toppar_keep(
-			rd_kafka_toppar_s2i(rko->rko_rktp));
+		rko_reply->rko_rktp = rd_kafka_toppar_keep(rko->rko_rktp);
 
 	rd_kafka_replyq_enq(&rko->rko_replyq, rko_reply, 0);
 
@@ -1750,6 +1754,7 @@ static void rd_kafka_handle_Metadata (rd_kafka_t *rk,
  *  topics.cnt >0   - only specified topics are requested
  *
  * @param reason    - metadata request reason
+ * @param cgrp_update - Update cgrp in parse_Metadata (see comment there).
  * @param rko       - (optional) rko with replyq for handling response.
  *                    Specifying an rko forces a metadata request even if
  *                    there is already a matching one in-transit.
@@ -1763,6 +1768,7 @@ static void rd_kafka_handle_Metadata (rd_kafka_t *rk,
 rd_kafka_resp_err_t
 rd_kafka_MetadataRequest (rd_kafka_broker_t *rkb,
                           const rd_list_t *topics, const char *reason,
+                          rd_bool_t cgrp_update,
                           rd_kafka_op_t *rko) {
         rd_kafka_buf_t *rkbuf;
         int16_t ApiVersion = 0;
@@ -1772,16 +1778,17 @@ rd_kafka_MetadataRequest (rd_kafka_broker_t *rkb,
 
         ApiVersion = rd_kafka_broker_ApiVersion_supported(rkb,
                                                           RD_KAFKAP_Metadata,
-                                                          0, 2,
+                                                          0, 4,
                                                           &features);
 
         rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_Metadata, 1,
-                                         4 + (50 * topic_cnt));
+                                         4 + (50 * topic_cnt) + 1);
 
         if (!reason)
                 reason = "";
 
         rkbuf->rkbuf_u.Metadata.reason = rd_strdup(reason);
+        rkbuf->rkbuf_u.Metadata.cgrp_update = cgrp_update;
 
         if (!topics && ApiVersion >= 1) {
                 /* a null(0) array (in the protocol) represents no topics */
@@ -1853,6 +1860,29 @@ rd_kafka_MetadataRequest (rd_kafka_broker_t *rkb,
                         rd_kafka_buf_write_str(rkbuf, topic, -1);
 
         }
+
+        if (ApiVersion >= 4) {
+                /* AllowAutoTopicCreation (only used by consumer) */
+                rd_kafka_buf_write_bool(
+                        rkbuf,
+                        rkb->rkb_rk->rk_type == RD_KAFKA_CONSUMER ?
+                        rkb->rkb_rk->rk_conf.allow_auto_create_topics :
+                        rd_true /*producer*/);
+        } else if (rkb->rkb_rk->rk_type == RD_KAFKA_CONSUMER &&
+                   !rkb->rkb_rk->rk_conf.allow_auto_create_topics &&
+                   rd_kafka_conf_is_modified(&rkb->rkb_rk->rk_conf,
+                                             "allow.auto.create.topics") &&
+                   rd_interval(&rkb->rkb_rk->rk_suppress.
+                               allow_auto_create_topics,
+                               30 * 60 * 1000 /* every 30 minutes */, 0) >= 0) {
+                /* Let user know we can't obey allow.auto.create.topics */
+                rd_rkb_log(rkb, LOG_WARNING, "AUTOCREATE",
+                           "allow.auto.create.topics=false not supported "
+                           "by broker: requires broker version >= 0.11.0.0: "
+                           "requested topic(s) may be auto created depending "
+                           "on broker auto.create.topics.enable configuration");
+        }
+
 
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
 
@@ -2306,7 +2336,7 @@ rd_kafka_handle_idempotent_Produce_error (rd_kafka_broker_t *rkb,
                                           rd_kafka_msgbatch_t *batch,
                                           struct rd_kafka_Produce_err *perr) {
         rd_kafka_t *rk = rkb->rkb_rk;
-        rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(batch->s_rktp);
+        rd_kafka_toppar_t *rktp = batch->rktp;
         rd_kafka_msg_t *firstmsg, *lastmsg;
         int r;
         rd_ts_t now = rd_clock(), state_age;
@@ -2671,7 +2701,7 @@ static int rd_kafka_handle_Produce_error (rd_kafka_broker_t *rkb,
                                           rd_kafka_msgbatch_t *batch,
                                           struct rd_kafka_Produce_err *perr) {
         rd_kafka_t *rk = rkb->rkb_rk;
-        rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(batch->s_rktp);
+        rd_kafka_toppar_t *rktp = batch->rktp;
         int is_leader;
 
         if (unlikely(perr->err == RD_KAFKA_RESP_ERR__DESTROY))
@@ -2993,7 +3023,7 @@ rd_kafka_handle_idempotent_Produce_success (rd_kafka_broker_t *rkb,
                                             rd_kafka_msgbatch_t *batch,
                                             int32_t next_seq) {
         rd_kafka_t *rk = rkb->rkb_rk;
-        rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(batch->s_rktp);
+        rd_kafka_toppar_t *rktp = batch->rktp;
         char fatal_err[512];
         uint64_t first_msgid, last_msgid;
 
@@ -3096,7 +3126,7 @@ rd_kafka_msgbatch_handle_Produce_result (
         const rd_kafka_buf_t *request) {
 
         rd_kafka_t *rk = rkb->rkb_rk;
-        rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(batch->s_rktp);
+        rd_kafka_toppar_t *rktp = batch->rktp;
         rd_kafka_msg_status_t status = RD_KAFKA_MSG_STATUS_POSSIBLY_PERSISTED;
         rd_bool_t last_inflight;
         int32_t next_seq;
@@ -3159,6 +3189,7 @@ rd_kafka_msgbatch_handle_Produce_result (
         if (likely(rd_kafka_msgq_len(&batch->msgq) > 0)) {
                 /* Set offset, timestamp and status for each message. */
                 rd_kafka_msgq_set_metadata(&batch->msgq,
+                                           rkb->rkb_nodeid,
                                            presult->offset,
                                            presult->timestamp,
                                            status);
@@ -3193,7 +3224,7 @@ static void rd_kafka_handle_Produce (rd_kafka_t *rk,
                                      rd_kafka_buf_t *request,
                                      void *opaque) {
         rd_kafka_msgbatch_t *batch = &request->rkbuf_batch;
-        rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(batch->s_rktp);
+        rd_kafka_toppar_t *rktp = batch->rktp;
         struct rd_kafka_Produce_result result = {
                 .offset = RD_KAFKA_OFFSET_INVALID,
                 .timestamp = -1
@@ -3229,7 +3260,7 @@ static void rd_kafka_handle_Produce (rd_kafka_t *rk,
 int rd_kafka_ProduceRequest (rd_kafka_broker_t *rkb, rd_kafka_toppar_t *rktp,
                              const rd_kafka_pid_t pid) {
         rd_kafka_buf_t *rkbuf;
-        rd_kafka_itopic_t *rkt = rktp->rktp_rkt;
+        rd_kafka_topic_t *rkt = rktp->rktp_rkt;
         size_t MessageSetSize = 0;
         int cnt;
         rd_ts_t now;
@@ -3945,7 +3976,7 @@ rd_kafka_AddPartitionsToTxnRequest (rd_kafka_broker_t *rkb,
         rd_kafka_buf_t *rkbuf;
         int16_t ApiVersion = 0;
         rd_kafka_toppar_t *rktp;
-        rd_kafka_itopic_t *last_rkt = NULL;
+        rd_kafka_topic_t *last_rkt = NULL;
         size_t of_TopicCnt;
         ssize_t of_PartCnt = -1;
         int TopicCnt = 0, PartCnt = 0;
@@ -4177,7 +4208,6 @@ static int unittest_idempotent_producer (void) {
         const int msgcnt = _BATCH_CNT * _MSGS_PER_BATCH;
         int remaining_batches;
         uint64_t msgid = 1;
-        shptr_rd_kafka_toppar_t *s_rktp;
         rd_kafka_toppar_t *rktp;
         rd_kafka_pid_t pid = { .id = 1000, .epoch = 0 };
         struct rd_kafka_Produce_result result = {
@@ -4219,9 +4249,8 @@ static int unittest_idempotent_producer (void) {
         rd_kafka_broker_unlock(rkb);
 
         /* Get toppar */
-        s_rktp = rd_kafka_toppar_get2(rk, "uttopic", 0, rd_false, rd_true);
-        RD_UT_ASSERT(s_rktp, "failed to get toppar");
-        rktp = rd_kafka_toppar_s2i(s_rktp);
+        rktp = rd_kafka_toppar_get2(rk, "uttopic", 0, rd_false, rd_true);
+        RD_UT_ASSERT(rktp, "failed to get toppar");
 
         /* Set the topic as exists so messages are enqueued on
          * the desired rktp away (otherwise UA partition) */
@@ -4391,7 +4420,7 @@ static int unittest_idempotent_producer (void) {
                      "expected %d DRs, not %d", msgcnt, drcnt);
 
         rd_kafka_queue_destroy(rkqu);
-        rd_kafka_toppar_destroy(s_rktp);
+        rd_kafka_toppar_destroy(rktp);
         rd_kafka_broker_destroy(rkb);
         rd_kafka_destroy(rk);
 

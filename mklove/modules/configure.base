@@ -912,7 +912,7 @@ Configuration summary:"
     local n=
     for n in $MKL_MKVARS ; do
         # Skip the boring booleans
-        if [[ $n == WITH_* || $n == WITHOUT_* || $n == HAVE_* || $n == def_* ]]; then
+        if [[ $n == ENABLE_* || $n == WITH_* || $n == WITHOUT_* || $n == HAVE_* || $n == def_* ]]; then
             continue
         fi
         printf "  %-24s %s\n" "$n" "${!n}"
@@ -1135,7 +1135,8 @@ function mkl_cache_read {
     IFS="$IFS="
     while read -r n v ; do
         [[ -z $n || $n = \#* || -z $v ]] && continue
-        mkl_var_set $n $v cache
+        # Don't let cache overwrite variables
+        [[ -n ${n+r} ]] || mkl_var_set $n $v cache
     done < config.cache
     IFS=$ORIG_IFS
 }
@@ -1246,10 +1247,8 @@ function mkl_check_begin {
 # certain call ordering, such as dependent library checks.
 #
 # Param 1: module name
-# Param 2: action
 function mkl_check {
     local modname=$1
-    local action=$2
 
     local func="${modname}_manual_checks"
     if ! mkl_func_exists "$func" ; then
@@ -1257,7 +1256,7 @@ function mkl_check {
         return 1
     fi
 
-    $func "$2"
+    $func
     return $?
 }
 
@@ -2174,11 +2173,13 @@ $1"
 # Arguments:
 #  option group ("Standard", "Cross-Compilation", etc..)
 #  variable name
-#  option ("--foo=feh")
+#  option ("--foo", "--foo=*", "--foo=args_required")
 #  help
 #  default (optional)
 #  assignvalue (optional, default:"y")
 #  function block (optional)
+#
+# If option takes the form --foo=* then arguments are optional.
 function mkl_option {
     local optgroup=$1
     local varname=$2
@@ -2210,6 +2211,10 @@ function mkl_option {
     if [[ $3 == *=* ]]; then
         optname="${optname%=*}"
         optval="${3#*=}"
+        if [[ $optval == '*' ]]; then
+            # Avoid globbing of --foo=* optional arguments
+            optval='\*'
+        fi
     fi
 
     safeopt=$(mkl_env_esc $optname)
@@ -2286,7 +2291,7 @@ function mkl_option {
 # Arguments:
 #  option group   ("Standard", ..)
 #  variable name  (WITH_FOO)
-#  option         (--enable-foo)
+#  option         (--enable-foo, --enable-foo=*, or --enable-foo=req)
 #  help           ("foo.." ("Enable" and "Disable" will be prepended))
 #  default        (y or n)
 

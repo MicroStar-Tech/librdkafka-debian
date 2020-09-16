@@ -55,12 +55,15 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #ifndef ssize_t
 #ifndef _BASETSD_H_
 #include <basetsd.h>
 #endif
+#ifndef _SSIZE_T_DEFINED
+#define _SSIZE_T_DEFINED
 typedef SSIZE_T ssize_t;
+#endif
 #endif
 #undef RD_EXPORT
 #ifdef LIBRDKAFKA_STATICLIB
@@ -108,7 +111,7 @@ namespace RdKafka {
  * @remark This value should only be used during compile time,
  *         for runtime checks of version use RdKafka::version()
  */
-#define RD_KAFKA_VERSION  0x010402ff
+#define RD_KAFKA_VERSION  0x010500ff
 
 /**
  * @brief Returns the librdkafka version as integer.
@@ -1604,7 +1607,7 @@ class RD_EXPORT Handle {
    * @returns ERR_NO_ERROR if no fatal error has been raised, else
    *          any other error code.
    */
-  virtual ErrorCode fatal_error (std::string &errstr) = 0;
+  virtual ErrorCode fatal_error (std::string &errstr) const = 0;
 
   /**
    * @brief Set SASL/OAUTHBEARER token and metadata
@@ -1765,7 +1768,7 @@ class RD_EXPORT Topic {
    * @returns the new topic handle or NULL on error (see \p errstr).
    */
   static Topic *create (Handle *base, const std::string &topic_str,
-                        Conf *conf, std::string &errstr);
+                        const Conf *conf, std::string &errstr);
 
   virtual ~Topic () = 0;
 
@@ -2213,6 +2216,10 @@ class RD_EXPORT Message {
    *
    * @remark The lifetime of the Headers are the same as the Message. */
   virtual RdKafka::Headers   *headers (RdKafka::ErrorCode *err) = 0;
+
+  /** @returns the broker id of the broker the message was produced to or
+   *           fetched from, or -1 if not known/applicable. */
+  virtual int32_t broker_id () const = 0;
 };
 
 /**@}*/
@@ -2348,7 +2355,7 @@ public:
    * @sa CONFIGURATION.md for \c group.id, \c session.timeout.ms,
    *     \c partition.assignment.strategy, etc.
    */
-  static KafkaConsumer *create (Conf *conf, std::string &errstr);
+  static KafkaConsumer *create (const Conf *conf, std::string &errstr);
 
   virtual ~KafkaConsumer () = 0;
 
@@ -2382,6 +2389,16 @@ public:
    *
    * Regex pattern matching automatically performed for topics prefixed
    * with \c \"^\" (e.g. \c \"^myPfx[0-9]_.*\"
+   *
+   * @remark A consumer error will be raised for each unavailable topic in the
+   *  \p topics. The error will be ERR_UNKNOWN_TOPIC_OR_PART
+   *  for non-existent topics, and
+   *  ERR_TOPIC_AUTHORIZATION_FAILED for unauthorized topics.
+   *  The consumer error will be raised through consume() (et.al.)
+   *  with the \c RdKafka::Message::err() returning one of the
+   *  error codes mentioned above.
+   *  The subscribe function itself is asynchronous and will not return
+   *  an error on unavailable topics.
    *
    * @returns an error if the provided list of topics is invalid.
    */
@@ -2652,7 +2669,7 @@ class RD_EXPORT Consumer : public virtual Handle {
    * @returns the new handle on success or NULL on error in which case
    * \p errstr is set to a human readable error message.
    */
-  static Consumer *create (Conf *conf, std::string &errstr);
+  static Consumer *create (const Conf *conf, std::string &errstr);
 
   virtual ~Consumer () = 0;
 
@@ -2829,7 +2846,7 @@ class RD_EXPORT Producer : public virtual Handle {
    * @returns the new handle on success or NULL on error in which case
    *          \p errstr is set to a human readable error message.
    */
-  static Producer *create (Conf *conf, std::string &errstr);
+  static Producer *create (const Conf *conf, std::string &errstr);
 
 
   virtual ~Producer () = 0;

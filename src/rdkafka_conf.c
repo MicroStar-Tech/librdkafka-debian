@@ -44,7 +44,7 @@
 #endif
 #include "rdunittest.h"
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 #include <netinet/tcp.h>
 #else
 
@@ -243,7 +243,7 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
                 { 0x8, "sasl" },
 		{ 0x10, "regex" },
 		{ 0x20, "lz4" },
-#if defined(_MSC_VER) || WITH_SASL_CYRUS
+#if defined(_WIN32) || WITH_SASL_CYRUS
                 { 0x40, "sasl_gssapi" },
 #endif
                 { 0x80, "sasl_plain" },
@@ -368,6 +368,21 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           _RK(metadata_refresh_sparse),
           "Sparse metadata requests (consumes less network bandwidth)",
           0, 1, 1 },
+        { _RK_GLOBAL, "topic.metadata.propagation.max.ms", _RK_C_INT,
+          _RK(metadata_propagation_max_ms),
+          "Apache Kafka topic creation is asynchronous and it takes some "
+          "time for a new topic to propagate throughout the cluster to all "
+          "brokers. "
+          "If a client requests topic metadata after manual topic creation but "
+          "before the topic has been fully propagated to the broker the "
+          "client is requesting metadata from, the topic will seem to be "
+          "non-existent and the client will mark the topic as such, "
+          "failing queued produced messages with `ERR__UNKNOWN_TOPIC`. "
+          "This setting delays marking a topic as non-existent until the "
+          "configured propagation max time has passed. "
+          "The maximum propagation time is calculated from the time the "
+          "topic is first referenced in the client, e.g., on produce().",
+          0, 60*60*1000, 30*1000 },
         { _RK_GLOBAL, "topic.blacklist", _RK_C_PATLIST,
           _RK(topic_blacklist),
           "Topic blacklist, a comma-separated list of regular expressions "
@@ -791,7 +806,7 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           "This client's Kerberos principal name. "
           "(Not supported on Windows, will use the logon user's principal).",
 	  .sdef = "kafkaclient" },
-#ifndef _MSC_VER
+#ifndef _WIN32
         { _RK_GLOBAL, "sasl.kerberos.kinit.cmd", _RK_C_STR,
           _RK(sasl.kinit_cmd),
           "Shell command to refresh or acquire the client's Kerberos ticket. "
@@ -996,16 +1011,20 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	{ _RK_GLOBAL|_RK_CONSUMER|_RK_MED, "queued.max.messages.kbytes",
           _RK_C_INT,
 	  _RK(queued_max_msg_kbytes),
-          "Maximum number of kilobytes per topic+partition in the "
-          "local consumer queue. "
+          "Maximum number of kilobytes of queued pre-fetched messages "
+          "in the local consumer queue. "
+          "If using the high-level consumer this setting applies to the "
+          "single consumer queue, regardless of the number of partitions. "
+          "When using the legacy simple consumer or when separate "
+          "partition queues are used this setting applies per partition. "
 	  "This value may be overshot by fetch.message.max.bytes. "
 	  "This property has higher priority than queued.min.messages.",
-          1, INT_MAX/1024, 0x100000/*1GB*/ },
+          1, INT_MAX/1024, 0x10000/*64MB*/ },
         { _RK_GLOBAL|_RK_CONSUMER, "fetch.wait.max.ms", _RK_C_INT,
 	  _RK(fetch_wait_max_ms),
-	  "Maximum time the broker may wait to fill the response "
-	  "with fetch.min.bytes.",
-	  0, 300*1000, 100 },
+	  "Maximum time the broker may wait to fill the Fetch response "
+	  "with fetch.min.bytes of messages.",
+	  0, 300*1000, 500 },
         { _RK_GLOBAL|_RK_CONSUMER|_RK_MED, "fetch.message.max.bytes",
           _RK_C_INT,
           _RK(fetch_msg_max_bytes),
@@ -1091,6 +1110,18 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           "on-disk corruption to the messages occurred. This check comes "
           "at slightly increased CPU usage.",
           0, 1, 0 },
+        { _RK_GLOBAL|_RK_CONSUMER, "allow.auto.create.topics", _RK_C_BOOL,
+          _RK(allow_auto_create_topics),
+          "Allow automatic topic creation on the broker when subscribing to "
+          "or assigning non-existent topics. "
+          "The broker must also be configured with "
+          "`auto.create.topics.enable=true` for this configuraiton to "
+          "take effect. "
+          "Note: The default value (false) is different from the "
+          "Java consumer (true). "
+          "Requires broker version >= 0.11.0.0, for older broker versions "
+          "only the broker configuration applies.",
+          0, 1, 0 },
         { _RK_GLOBAL, "client.rack", _RK_C_KSTR,
           _RK(client_rack),
           "A rack identifier for this client. This can be any string value "
@@ -1174,7 +1205,7 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  "A higher value allows larger and more effective "
           "(less overhead, improved compression) batches of messages to "
           "accumulate at the expense of increased message delivery latency.",
-	  .dmin = 0, .dmax = 900.0*1000.0, .ddef = 0.5 },
+	  .dmin = 0, .dmax = 900.0*1000.0, .ddef = 5.0 },
         { _RK_GLOBAL|_RK_PRODUCER|_RK_HIGH, "linger.ms", _RK_C_ALIAS,
           .sdef = "queue.buffering.max.ms" },
         { _RK_GLOBAL|_RK_PRODUCER|_RK_HIGH, "message.send.max.retries",
@@ -1228,8 +1259,19 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
         { _RK_GLOBAL|_RK_PRODUCER|_RK_MED, "batch.num.messages", _RK_C_INT,
 	  _RK(batch_num_messages),
 	  "Maximum number of messages batched in one MessageSet. "
-	  "The total MessageSet size is also limited by message.max.bytes.",
+	  "The total MessageSet size is also limited by batch.size and "
+          "message.max.bytes.",
 	  1, 1000000, 10000 },
+        { _RK_GLOBAL|_RK_PRODUCER|_RK_MED, "batch.size", _RK_C_INT,
+	  _RK(batch_size),
+	  "Maximum size (in bytes) of all messages batched in one MessageSet, "
+          "including protocol framing overhead. "
+          "This limit is applied after the first message has been added "
+          "to the batch, regardless of the first message's size, this is to "
+          "ensure that messages that exceed batch.size are produced. "
+	  "The total MessageSet size is also limited by batch.num.messages and "
+          "message.max.bytes.",
+	  1, INT_MAX, 1000000 },
 	{ _RK_GLOBAL|_RK_PRODUCER, "delivery.report.only.error", _RK_C_BOOL,
 	  _RK(dr_err_only),
 	  "Only provide delivery reports for failed messages.",
@@ -1484,8 +1526,8 @@ rd_kafka_conf_prop_find (int scope, const char *name) {
  * @returns rd_true if property has been set/modified, else rd_false.
  *          If \p name is unknown 0 is returned.
  */
-static rd_bool_t rd_kafka_conf_is_modified (const rd_kafka_conf_t *conf,
-                                            const char *name) {
+rd_bool_t rd_kafka_conf_is_modified (const rd_kafka_conf_t *conf,
+                                     const char *name) {
         const struct rd_kafka_property *prop;
 
         if (!(prop = rd_kafka_conf_prop_find(_RK_GLOBAL, name)))
@@ -1538,7 +1580,6 @@ rd_kafka_anyconf_set_prop0 (int scope, void *conf,
 
         if (prop->set) {
                 /* Custom setter */
-                rd_kafka_conf_res_t res;
 
                 res = prop->set(scope, conf, prop->name, istr,
                                 _RK_PTR(void *, conf, prop->offset),
@@ -2135,7 +2176,7 @@ void rd_kafka_desensitize_str (char *str) {
         size_t len;
         static const char redacted[] = "(REDACTED)";
 
-#ifdef _MSC_VER
+#ifdef _WIN32
         len = strlen(str);
         SecureZeroMemory(str, len);
 #else
@@ -2597,7 +2638,7 @@ rd_kafka_conf_set_closesocket_cb (rd_kafka_conf_t *conf,
 
 
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 void rd_kafka_conf_set_open_cb (rd_kafka_conf_t *conf,
                                 int (*open_cb) (const char *pathname,
                                                 int flags, mode_t mode,
@@ -3418,14 +3459,17 @@ const char *rd_kafka_conf_finalize (rd_kafka_type_t cltype,
 
         if (cltype == RD_KAFKA_CONSUMER) {
                 /* Automatically adjust `fetch.max.bytes` to be >=
-                 * `message.max.bytes` unless set by user. */
+                 * `message.max.bytes` and <= `queued.max.message.kbytes`
+                 * unless set by user. */
                 if (rd_kafka_conf_is_modified(conf, "fetch.max.bytes")) {
                         if (conf->fetch_max_bytes < conf->max_msg_size)
                                 return "`fetch.max.bytes` must be >= "
                                         "`message.max.bytes`";
                 } else {
-                        conf->fetch_max_bytes = RD_MAX(conf->fetch_max_bytes,
-                                                       conf->max_msg_size);
+                        conf->fetch_max_bytes = RD_MAX(
+                                RD_MIN(conf->fetch_max_bytes,
+                                       conf->queued_max_msg_kbytes * 1024),
+                                conf->max_msg_size);
                 }
 
                 /* Automatically adjust 'receive.message.max.bytes' to
@@ -3468,7 +3512,7 @@ const char *rd_kafka_conf_finalize (rd_kafka_type_t cltype,
                         /* Make sure at least one request can be sent
                          * before the transaction times out. */
                         if (!rd_kafka_conf_is_modified(conf,
-                                                       "session.timeout.ms"))
+                                                       "socket.timeout.ms"))
                                 conf->socket_timeout_ms =
                                         RD_MAX(conf->eos.
                                                transaction_timeout_ms - 100,
@@ -3601,15 +3645,20 @@ const char *rd_kafka_topic_conf_finalize (rd_kafka_type_t cltype,
 
 
         if (cltype == RD_KAFKA_PRODUCER) {
+                if (tconf->message_timeout_ms != 0 &&
+                    (double)tconf->message_timeout_ms <=
+                    conf->buffering_max_ms_dbl) {
+                        if (rd_kafka_topic_conf_is_modified(tconf, "linger.ms"))
+                                return "`message.timeout.ms` must be greater "
+                                        "than `linger.ms`";
+                        else
+                                conf->buffering_max_ms_dbl =
+                                        (double)tconf->message_timeout_ms - 0.1;
+                }
+
                 /* Convert double linger.ms to internal int microseconds */
                 conf->buffering_max_us = (rd_ts_t)(conf->buffering_max_ms_dbl *
                                                    1000);
-
-                if (tconf->message_timeout_ms != 0 &&
-                    (rd_ts_t)tconf->message_timeout_ms * 1000 <=
-                    conf->buffering_max_us)
-                        return "`message.timeout.ms` must be greater than "
-                                "`linger.ms`";
         }
 
 
@@ -3718,6 +3767,12 @@ int rd_kafka_conf_warn (rd_kafka_t *rk) {
                              "Configuration property `client.software.verison` "
                              "may only contain 'a-zA-Z0-9.-', other characters "
                              "will be replaced with '-'");
+
+        if (rd_atomic32_get(&rk->rk_broker_cnt) == 0)
+                rd_kafka_log(rk, LOG_NOTICE, "CONFWARN",
+                             "No `bootstrap.servers` configured: "
+                             "client will not be able to connect "
+                             "to Kafka cluster");
 
         return cnt;
 }

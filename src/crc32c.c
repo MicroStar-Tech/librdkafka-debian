@@ -50,7 +50,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#ifndef _MSC_VER
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 
@@ -399,8 +399,6 @@ int unittest_crc32c (void) {
         const uint32_t expected_crc = 0x7dcde113;
         uint32_t crc;
         const char *how;
-
-        crc32c_global_init();
 
 #if WITH_CRC32C_HW
         if (sse42)

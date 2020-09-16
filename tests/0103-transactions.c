@@ -68,6 +68,8 @@ void do_produce_batch (rd_kafka_t *rk, const char *topic, uint64_t testid,
         ret = rd_kafka_produce_batch(rkt, partition, RD_KAFKA_MSG_F_COPY,
                                      messages, cnt);
 
+        rd_kafka_topic_destroy(rkt);
+
         TEST_ASSERT(ret == cnt,
                     "Failed to batch-produce: %d/%d messages produced",
                     ret, cnt);
@@ -377,7 +379,7 @@ void do_test_consumer_producer_txn (void) {
         test_msgver_init(&expect_mv, testid);
 
         for (txn = 0 ; txn < txncnt ; txn++) {
-                int msgcnt = 10 * (1 + (txn % 3));
+                int msgcnt2 = 10 * (1 + (txn % 3));
                 rd_kafka_message_t *msgs[_MSGCNT];
                 int i;
                 rd_bool_t do_abort = !(txn % 3);
@@ -385,19 +387,19 @@ void do_test_consumer_producer_txn (void) {
                 rd_kafka_topic_partition_list_t *offsets;
                 rd_kafka_resp_err_t err;
                 rd_kafka_consumer_group_metadata_t *c1_cgmetadata;
-                int remains = msgcnt;
+                int remains = msgcnt2;
 
                 TEST_SAY(_C_BLU "Begin transaction #%d/%d "
                          "(msgcnt=%d, do_abort=%s, recreate_consumer=%s)\n",
-                         txn, txncnt, msgcnt,
+                         txn, txncnt, msgcnt2,
                          do_abort ? "true":"false",
                          recreate_consumer ? "true":"false");
 
-                consume_messages(c1, msgs, msgcnt);
+                consume_messages(c1, msgs, msgcnt2);
 
                 TEST_CALL_ERROR__(rd_kafka_begin_transaction(p2));
 
-                for (i = 0 ; i < msgcnt ; i++) {
+                for (i = 0 ; i < msgcnt2 ; i++) {
                         rd_kafka_message_t *msg = msgs[i];
 
                         if (!do_abort) {
@@ -429,7 +431,7 @@ void do_test_consumer_producer_txn (void) {
                         rd_kafka_poll(p2, 0);
                 }
 
-                destroy_messages(msgs, msgcnt);
+                destroy_messages(msgs, msgcnt2);
 
                 err = rd_kafka_assignment(c1, &offsets);
                 TEST_ASSERT(!err, "failed to get consumer assignment: %s",
@@ -537,6 +539,7 @@ static void do_test_misuse_txn (void) {
                     error ? rd_kafka_error_string(error) : "");
         TEST_ASSERT(rd_kafka_error_is_fatal(error),
                     "Expected error to have is_fatal() set");
+        rd_kafka_error_destroy(error);
         /* Check that a fatal error is raised */
         fatal_err = rd_kafka_fatal_error(p, errstr, sizeof(errstr));
         TEST_ASSERT(fatal_err == RD_KAFKA_RESP_ERR_INVALID_TRANSACTION_TIMEOUT,
@@ -565,6 +568,7 @@ static void do_test_misuse_txn (void) {
         TEST_ASSERT(rd_kafka_error_code(error) == RD_KAFKA_RESP_ERR__STATE,
                     "Expected ERR__STATE error, not %s",
                     rd_kafka_error_name(error));
+        rd_kafka_error_destroy(error);
 
         TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
 
@@ -573,6 +577,7 @@ static void do_test_misuse_txn (void) {
         TEST_ASSERT(rd_kafka_error_code(error) == RD_KAFKA_RESP_ERR__STATE,
                     "Expected ERR__STATE error, not %s",
                     rd_kafka_error_name(error));
+        rd_kafka_error_destroy(error);
 
         rd_kafka_destroy(p);
 
@@ -596,6 +601,7 @@ static void do_test_misuse_txn (void) {
                     rd_kafka_error_string(error));
         TEST_ASSERT(rd_kafka_error_is_retriable(error),
                     "Expected error to be retriable");
+        rd_kafka_error_destroy(error);
 
         TEST_CALL_ERROR__(rd_kafka_init_transactions(p, 30*1000));
 

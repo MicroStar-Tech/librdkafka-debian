@@ -28,7 +28,7 @@ SRCS_y += rdkafka_lz4.c $(SRCS_LZ4)
 SRCS_$(WITH_LIBDL) += rddl.c
 SRCS_$(WITH_PLUGINS) += rdkafka_plugin.c
 
-ifeq ($(HAVE_REGEX), n)
+ifneq ($(HAVE_REGEX), y)
 SRCS_y += regexp.c
 endif
 
@@ -82,9 +82,9 @@ $(SRCS_LZ4:.c=.o): CFLAGS:=$(CFLAGS) -O3
 
 ifeq ($(WITH_LDS),y)
 # Enable linker script if supported by platform
-LIB_LDFLAGS+= $(LDFLAG_LINKERSCRIPT)$(LIBNAME).lds
+LIB_LDFLAGS+= $(LDFLAG_LINKERSCRIPT)$(LIBNAME_LDS)
 
-$(LIBNAME).lds: $(HDRS)
+$(LIBNAME_LDS): $(HDRS)
 	@(printf "$(MKL_YELLOW)Generating linker script $@ from $(HDRS)$(MKL_CLR_RESET)\n" ; \
 	  cat $(HDRS) | ../lds-gen.py > $@)
 endif

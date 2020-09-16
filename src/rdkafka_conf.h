@@ -193,6 +193,7 @@ struct rd_kafka_conf_s {
 	int     metadata_refresh_fast_interval_ms;
         int     metadata_refresh_sparse;
         int     metadata_max_age_ms;
+        int     metadata_propagation_max_ms;
 	int     debug;
 	int     broker_addr_ttl;
         int     broker_addr_family;
@@ -329,6 +330,7 @@ struct rd_kafka_conf_s {
 	int    fetch_error_backoff_ms;
         char  *group_id_str;
         char  *group_instance_id;
+        int    allow_auto_create_topics;
 
         rd_kafka_pattern_list_t *topic_blacklist;
         struct rd_kafka_topic_conf_s *topic_conf; /* Default topic config
@@ -388,6 +390,7 @@ struct rd_kafka_conf_s {
 	int    max_retries;
 	int    retry_backoff_ms;
 	int    batch_num_messages;
+        int    batch_size;
 	rd_kafka_compression_t compression_codec;
 	int    dr_err_only;
 
@@ -506,7 +509,7 @@ struct rd_kafka_conf_s {
 int rd_kafka_socket_cb_linux (int domain, int type, int protocol, void *opaque);
 int rd_kafka_socket_cb_generic (int domain, int type, int protocol,
                                 void *opaque);
-#ifndef _MSC_VER
+#ifndef _WIN32
 int rd_kafka_open_cb_linux (const char *pathname, int flags, mode_t mode,
                             void *opaque);
 #endif
@@ -552,6 +555,9 @@ struct rd_kafka_topic_conf_s {
 
 
 void rd_kafka_anyconf_destroy (int scope, void *conf);
+
+rd_bool_t rd_kafka_conf_is_modified (const rd_kafka_conf_t *conf,
+                                     const char *name);
 
 void rd_kafka_desensitize_str (char *str);
 

@@ -73,6 +73,10 @@ void test_delete_topic (rd_kafka_t *use_rk, const char *topicname);
 void test_create_topic (rd_kafka_t *use_rk, const char *topicname,
                         int partition_cnt, int replication_factor);
 
+void test_wait_topic_exists (rd_kafka_t *rk, const char *topic, int tmout);
+
+void test_kafka_cmd (const char *fmt, ...);
+
 uint64_t
 test_produce_msgs_easy_size (const char *topic, uint64_t testid,
                              int32_t partition, int msgcnt, size_t size);
@@ -177,7 +181,7 @@ int test_check_builtin (const char *feature);
  */
 extern const char *test_curr_name (void);
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 #include <sys/time.h>
 #ifndef RD_UNUSED
 #define RD_UNUSED __attribute__((unused))
@@ -186,7 +190,7 @@ extern const char *test_curr_name (void);
 #else
 
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
+#include <windows.h>
 #endif
 
 #ifndef RD_UNUSED
@@ -208,7 +212,7 @@ static RD_INLINE int64_t test_clock (void) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
         return ((int64_t)tv.tv_sec * 1000000LLU) + (int64_t)tv.tv_usec;
-#elif _MSC_VER
+#elif defined(_WIN32)
         LARGE_INTEGER now;
         static RD_TLS LARGE_INTEGER freq;
         if (!freq.QuadPart)
@@ -303,7 +307,7 @@ static RD_UNUSED int TIMING_EVERY (test_timing_t *timing, int us) {
 }
 
 
-#ifndef _MSC_VER
+#ifndef _WIN32
 #define rd_sleep(S) sleep(S)
 #else
 #define rd_sleep(S) Sleep((S)*1000)

@@ -114,12 +114,12 @@ void rd_kafka_op_print (FILE *fp, const char *prefix, rd_kafka_op_t *rko) {
 #endif
 			);
 	if (rko->rko_rktp) {
-		rd_kafka_toppar_t *rktp = rd_kafka_toppar_s2i(rko->rko_rktp);
 		fprintf(fp, "%s ((rd_kafka_toppar_t*)%p) "
-			"%s [%"PRId32"] v%d (shptr %p)\n",
-			prefix, rktp, rktp->rktp_rkt->rkt_topic->str,
-			rktp->rktp_partition,
-			rd_atomic32_get(&rktp->rktp_version), rko->rko_rktp);
+			"%s [%"PRId32"] v%d\n",
+			prefix, rko->rko_rktp,
+                        rko->rko_rktp->rktp_rkt->rkt_topic->str,
+			rko->rko_rktp->rktp_partition,
+			rd_atomic32_get(&rko->rko_rktp->rktp_version));
 	}
 
 	switch (rko->rko_type & ~RD_KAFKA_OP_FLAGMASK)
@@ -138,9 +138,8 @@ void rd_kafka_op_print (FILE *fp, const char *prefix, rd_kafka_op_t *rko) {
 	case RD_KAFKA_OP_DR:
 		fprintf(fp, "%s %"PRId32" messages on %s\n", prefix,
 			rko->rko_u.dr.msgq.rkmq_msg_cnt,
-			rko->rko_u.dr.s_rkt ?
-			rd_kafka_topic_s2i(rko->rko_u.dr.s_rkt)->
-			rkt_topic->str : "(n/a)");
+			rko->rko_u.dr.rkt ?
+			rko->rko_u.dr.rkt->rkt_topic->str : "(n/a)");
 		break;
 	case RD_KAFKA_OP_OFFSET_COMMIT:
 		fprintf(fp, "%s Callback: %p (opaque %p)\n",
@@ -300,8 +299,8 @@ void rd_kafka_op_destroy (rd_kafka_op_t *rko) {
 		if (rko->rko_u.dr.do_purge2)
 			rd_kafka_msgq_purge(rko->rko_rk, &rko->rko_u.dr.msgq2);
 
-		if (rko->rko_u.dr.s_rkt)
-			rd_kafka_topic_destroy0(rko->rko_u.dr.s_rkt);
+		if (rko->rko_u.dr.rkt)
+			rd_kafka_topic_destroy0(rko->rko_u.dr.rkt);
 		break;
 
 	case RD_KAFKA_OP_OFFSET_RESET:
@@ -383,32 +382,69 @@ void rd_kafka_op_destroy (rd_kafka_op_t *rko) {
 
 /**
  * Propagate an error event to the application on a specific queue.
- * \p optype should be RD_KAFKA_OP_ERR for generic errors and
- * RD_KAFKA_OP_CONSUMER_ERR for consumer errors.
  */
-void rd_kafka_q_op_err (rd_kafka_q_t *rkq, rd_kafka_op_type_t optype,
-                        rd_kafka_resp_err_t err, int32_t version,
-			rd_kafka_toppar_t *rktp, int64_t offset,
+void rd_kafka_q_op_err (rd_kafka_q_t *rkq, rd_kafka_resp_err_t err,
                         const char *fmt, ...) {
-	va_list ap;
-	char buf[2048];
-	rd_kafka_op_t *rko;
+        va_list ap;
+        char buf[2048];
+        rd_kafka_op_t *rko;
 
-	va_start(ap, fmt);
-	rd_vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
+        va_start(ap, fmt);
+        rd_vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
 
-	rko = rd_kafka_op_new(optype);
-	rko->rko_version = version;
-	rko->rko_err = err;
-	rko->rko_u.err.offset = offset;
-	rko->rko_u.err.errstr = rd_strdup(buf);
-	if (rktp)
-		rko->rko_rktp = rd_kafka_toppar_keep(rktp);
+        rko = rd_kafka_op_new(RD_KAFKA_OP_ERR);
+        rko->rko_err = err;
+        rko->rko_u.err.errstr = rd_strdup(buf);
 
-	rd_kafka_q_enq(rkq, rko);
+        rd_kafka_q_enq(rkq, rko);
 }
 
+
+
+/**
+ * @brief Enqueue RD_KAFKA_OP_CONSUMER_ERR on \p rkq.
+ *
+ * @param broker_id Is the relevant broker id, or RD_KAFKA_NODEID_UA (-1)
+ *                  if not applicable.
+ * @param err Error code.
+ * @param version Queue version barrier, or 0 if not applicable.
+ * @param topic May be NULL. Mutually exclusive with \p rktp.
+ * @param rktp May be NULL. Mutually exclusive with \p topic.
+ * @param offset RD_KAFKA_OFFSET_INVALID if not applicable.
+ *
+ * @sa rd_kafka_q_op_err()
+ */
+void rd_kafka_consumer_err (rd_kafka_q_t *rkq, int32_t broker_id,
+                            rd_kafka_resp_err_t err, int32_t version,
+                            const char *topic, rd_kafka_toppar_t *rktp,
+                            int64_t offset, const char *fmt, ...) {
+        va_list ap;
+        char buf[2048];
+        rd_kafka_op_t *rko;
+
+        va_start(ap, fmt);
+        rd_vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+
+        rko = rd_kafka_op_new(RD_KAFKA_OP_CONSUMER_ERR);
+        rko->rko_version = version;
+        rko->rko_err = err;
+        rko->rko_u.err.offset = offset;
+        rko->rko_u.err.errstr = rd_strdup(buf);
+        rko->rko_u.err.rkm.rkm_broker_id = broker_id;
+
+        if (rktp) {
+                rd_assert(!topic);
+                rko->rko_rktp = rd_kafka_toppar_keep(rktp);
+        } else if (topic)
+                rko->rko_u.err.rkm.rkm_rkmessage.rkt =
+                        (rd_kafka_topic_t *)rd_kafka_lwtopic_new(rkq->rkq_rk,
+                                                                 topic);
+
+
+        rd_kafka_q_enq(rkq, rko);
+}
 
 
 /**
@@ -425,8 +461,7 @@ rd_kafka_op_t *rd_kafka_op_new_reply (rd_kafka_op_t *rko_orig,
 	rd_kafka_op_get_reply_version(rko, rko_orig);
 	rko->rko_err     = err;
 	if (rko_orig->rko_rktp)
-		rko->rko_rktp = rd_kafka_toppar_keep(
-			rd_kafka_toppar_s2i(rko_orig->rko_rktp));
+		rko->rko_rktp = rd_kafka_toppar_keep(rko_orig->rko_rktp);
 
         return rko;
 }
@@ -740,7 +775,7 @@ void rd_kafka_op_offset_store (rd_kafka_t *rk, rd_kafka_op_t *rko) {
 	if (unlikely(rko->rko_type != RD_KAFKA_OP_FETCH || rko->rko_err))
 		return;
 
-	rktp = rd_kafka_toppar_s2i(rko->rko_rktp);
+	rktp = rko->rko_rktp;
 
 	if (unlikely(!rk))
 		rk = rktp->rktp_rkt->rkt_rk;

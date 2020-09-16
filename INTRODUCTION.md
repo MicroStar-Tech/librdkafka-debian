@@ -70,6 +70,7 @@ librdkafka also provides a native C++ interface.
         - [Consumer groups](#consumer-groups)
             - [Static consumer groups](#static-consumer-groups)
         - [Topics](#topics)
+            - [Unknown or unauthorized topics](#unknown-or-unauthorized-topics)
             - [Topic auto creation](#topic-auto-creation)
         - [Metadata](#metadata)
             - [< 0.9.3](#-093)
@@ -109,8 +110,9 @@ or if a low latency service is required, or a balance between the two, all
 through the configuration property interface.
 
 The single most important configuration properties for performance tuning is
-`linger.ms` - how long to wait for `batch.num.messages` to fill up in the
-local per-partition queue before sending the batch of messages to the broker.
+`linger.ms` - how long to wait for `batch.num.messages` or `batch.size` to
+fill up in the local per-partition queue before sending the batch of messages
+to the broker.
 
 In low throughput scenarios, a lower value improves latency.
 As throughput increases, the cost of each broker request becomes significant
@@ -130,8 +132,8 @@ overhead and eliminates the adverse effect of the round trip time (rtt).
 
 `linger.ms` (also called `queue.buffering.max.ms`) allows librdkafka to
 wait up to the specified amount of time to accumulate up to
-`batch.num.messages` in a single batch (MessageSet) before sending
-to the broker. The larger the batch the higher the throughput.
+`batch.num.messages` or `batch.size` in a single batch (MessageSet) before
+sending to the broker. The larger the batch the higher the throughput.
 Enabling `msg` debugging (set `debug` property to `msg`) will emit log
 messages for the accumulation process which lets you see what batch sizes
 are being produced.
@@ -245,8 +247,8 @@ configuration property.
 
 Compression is performed on the batch of messages in the local queue, the
 larger the batch the higher likelyhood of a higher compression ratio.
-The local batch queue size is controlled through the `batch.num.messages` and
-`linger.ms` configuration properties as described in the
+The local batch queue size is controlled through the `batch.num.messages`,
+`batch.size`, and `linger.ms` configuration properties as described in the
 **High throughput** chapter above.
 
 
@@ -1456,10 +1458,69 @@ To read more about static group membership, see [KIP-345](https://cwiki.apache.o
 
 ### Topics
 
+#### Unknown or unauthorized topics
+
+If a consumer application subscribes to non-existent or unauthorized topics
+a consumer error will be propagated for each unavailable topic with the
+error code set to either `RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART` or a
+broker-specific error code, such as
+`RD_KAFKA_RESP_ERR_TOPIC_AUTHORIZATION_FAILED`.
+
+As the topic metadata is refreshed every `topic.metadata.refresh.interval.ms`
+the unavailable topics are re-checked for availability, but the same error
+will not be raised again for the same topic.
+
+#### Topic metadata propagation for newly created topics
+
+Due to the asynchronous nature of topic creation in Apache Kafka it may
+take some time for a newly created topic to be known by all brokers in the
+cluster.
+If a client tries to use a topic after topic creation but before the topic
+has been fully propagated in the cluster it will seem as if the topic does not
+exist which would raise `RD_KAFKA_RESP_ERR__UNKNOWN_TOPIC` (et.al)
+errors to the application.
+To avoid these temporary errors being raised, the client will not flag
+a topic as non-existent until a propagation time has elapsed, this propagation
+defaults to 30 seconds and can be configured with
+`topic.metadata.propagation.max.ms`.
+The per-topic max propagation time starts ticking as soon as the topic is
+referenced (e.g., by produce()).
+
+If messages are produced to unknown topics during the propagation time, the
+messages will be queued for later delivery to the broker when the topic
+metadata has propagated.
+Should the topic propagation time expire without the topic being seen the
+produced messages will fail with `RD_KAFKA_RESP_ERR__UNKNOWN_TOPIC`.
+
+**Note**: The propagation time will not take affect if a topic is known to
+          the client and then deleted, in this case the topic will immediately
+          be marked as non-existent and remain non-existent until a topic
+          metadata refresh sees the topic again (after the topic has been
+          re-created).
+
+
 #### Topic auto creation
 
-Topic auto creation is supported by librdkafka.
-The broker needs to be configured with `auto.create.topics.enable=true`.
+Topic auto creation is supported by librdkafka, if a non-existent topic is
+referenced by the client (by produce to, or consuming from, the topic, etc)
+the broker will automatically create the topic (with default partition counts
+and replication factor) if the broker configuration property
+`auto.create.topics.enable=true` is set.
+
+*Note*: A topic that is undergoing automatic creation may be reported as
+unavailable, with e.g., `RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART`, during the
+time the topic is being created and partition leaders are elected.
+
+While topic auto creation may be useful for producer applications, it is not
+particularily valuable for consumer applications since even if the topic
+to consume is auto created there is nothing writing messages to the topic.
+To avoid consumers automatically creating topics the
+`allow.auto.create.topics` consumer configuration property is set to
+`false` by default, preventing the consumer to trigger automatic topic
+creation on the broker. This requires broker version v0.11.0.0 or later.
+The `allow.auto.create.topics` property may be set to `true` to allow
+auto topic creation, which also requires `auto.create.topics.enable=true` to
+be configured on the broker.
 
 
 
@@ -1740,7 +1801,7 @@ The [Apache Kafka Implementation Proposals (KIPs)](https://cwiki.apache.org/conf
 | KIP-357 - AdminAPI: list ACLs per principal                              | 2.1.0                                     | Not supported                                                                                 |
 | KIP-359 - Producer: use EpochLeaderId                                    | 2.4.0                                     | Not supported                                                                                 |
 | KIP-360 - Improve handling of unknown Idempotent Producer                | 2.4.0                                     | Not supported                                                                                 |
-| KIP-361 - Consumer: add config to disable auto topic creation            | 2.3.0                                     | Not supported                                                                                 |
+| KIP-361 - Consumer: add config to disable auto topic creation            | 2.3.0                                     | Supported                                                                                     |
 | KIP-368 - SASL period reauth                                             | 2.2.0                                     | Not supported                                                                                 |
 | KIP-369 - Always roundRobin partitioner                                  | 2.4.0                                     | Not supported                                                                                 |
 | KIP-389 - Consumer group max size                                        | 2.2.0                                     | Supported (error is propagated to application, but the consumer does not raise a fatal error) |
@@ -1774,7 +1835,7 @@ release of librdkafka.
 | ApiKey  | Request name            | Kafka max   | librdkafka max          |
 | ------- | -------------------     | ----------- | ----------------------- |
 | 0       | Produce                 | 7           | 7                       |
-| 1       | Fetch                   | 11          | 4                       |
+| 1       | Fetch                   | 11          | 11                      |
 | 2       | ListOffsets             | 5           | 1                       |
 | 3       | Metadata                | 8           | 2                       |
 | 4       | LeaderAndIsr            | 2           | -                       |
