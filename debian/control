@@ -12,7 +12,7 @@ Build-Depends:
  libzstd-dev,
  python3,
  zlib1g-dev,
-Standards-Version: 4.5.0
+Standards-Version: 4.5.1
 Rules-Requires-Root: no
 Section: libs
 Homepage: https://github.com/edenhill/librdkafka
