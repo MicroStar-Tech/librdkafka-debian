@@ -328,18 +328,20 @@ class MessageImpl : public Message {
       delete headers_;
   };
 
-  MessageImpl (RdKafka::Topic *topic, rd_kafka_message_t *rkmessage):
-  topic_(topic), rkmessage_(rkmessage), free_rkmessage_(true), key_(NULL),
-  headers_(NULL) {}
+  MessageImpl (rd_kafka_type_t rk_type,
+               RdKafka::Topic *topic, rd_kafka_message_t *rkmessage):
+      topic_(topic), rkmessage_(rkmessage),
+      free_rkmessage_(true), key_(NULL), headers_(NULL), rk_type_(rk_type) {}
 
-  MessageImpl (RdKafka::Topic *topic, rd_kafka_message_t *rkmessage,
+  MessageImpl (rd_kafka_type_t rk_type,
+               RdKafka::Topic *topic, rd_kafka_message_t *rkmessage,
                bool dofree):
-  topic_(topic), rkmessage_(rkmessage), free_rkmessage_(dofree), key_(NULL),
-  headers_(NULL) {}
+      topic_(topic), rkmessage_(rkmessage),
+      free_rkmessage_(dofree), key_(NULL), headers_(NULL), rk_type_(rk_type) {}
 
-  MessageImpl (rd_kafka_message_t *rkmessage):
-  topic_(NULL), rkmessage_(rkmessage), free_rkmessage_(true), key_(NULL),
-  headers_(NULL) {
+  MessageImpl (rd_kafka_type_t rk_type, rd_kafka_message_t *rkmessage):
+      topic_(NULL), rkmessage_(rkmessage),
+      free_rkmessage_(true), key_(NULL), headers_(NULL), rk_type_(rk_type)  {
     if (rkmessage->rkt) {
       /* Possibly NULL */
       topic_ = static_cast<Topic *>(rd_kafka_topic_opaque(rkmessage->rkt));
@@ -347,20 +349,23 @@ class MessageImpl : public Message {
   }
 
   /* Create errored message */
-  MessageImpl (RdKafka::Topic *topic, RdKafka::ErrorCode err):
-  topic_(topic), free_rkmessage_(false), key_(NULL), headers_(NULL) {
+  MessageImpl (rd_kafka_type_t rk_type,
+               RdKafka::Topic *topic, RdKafka::ErrorCode err):
+      topic_(topic), free_rkmessage_(false),
+      key_(NULL), headers_(NULL), rk_type_(rk_type)  {
     rkmessage_ = &rkmessage_err_;
     memset(&rkmessage_err_, 0, sizeof(rkmessage_err_));
     rkmessage_err_.err = static_cast<rd_kafka_resp_err_t>(err);
   }
 
   std::string         errstr() const {
-    /* FIXME: If there is an error string in payload (for consume_cb)
-     *        it wont be shown since 'payload' is reused for errstr
-     *        and we cant distinguish between consumer and producer.
-     *        For the producer case the payload needs to be the original
-     *        payload pointer. */
-    const char *es = rd_kafka_err2str(rkmessage_->err);
+    const char *es;
+    /* message_errstr() is only available for the consumer. */
+    if (rk_type_ == RD_KAFKA_CONSUMER)
+      es = rd_kafka_message_errstr(rkmessage_);
+    else
+      es = rd_kafka_err2str(rkmessage_->err);
+
     return std::string(es ? es : "");
   }
 
@@ -456,6 +461,7 @@ private:
   MessageImpl& operator=(MessageImpl const&) /*= delete*/;
 
   RdKafka::Headers *headers_;
+  const rd_kafka_type_t rk_type_; /**< Client type */
 };
 
 
@@ -971,7 +977,7 @@ class HandleImpl : virtual public Handle {
                                                extensions_copy,
                                                extensions.size(),
                                                errbuf, sizeof(errbuf)));
-          free(extensions_copy);
+          delete[] extensions_copy;
 
           if (err != ERR_NO_ERROR)
               errstr = errbuf;
@@ -1103,17 +1109,25 @@ class ConsumerGroupMetadataImpl : public ConsumerGroupMetadata {
 class KafkaConsumerImpl : virtual public KafkaConsumer, virtual public HandleImpl {
 public:
   ~KafkaConsumerImpl () {
-
+    if (rk_)
+      rd_kafka_destroy_flags(rk_, RD_KAFKA_DESTROY_F_NO_CONSUMER_CLOSE);
   }
 
   static KafkaConsumer *create (Conf *conf, std::string &errstr);
 
   ErrorCode assignment (std::vector<TopicPartition*> &partitions);
+  bool assignment_lost ();
+  std::string rebalance_protocol () {
+    const char *str = rd_kafka_rebalance_protocol(rk_);
+    return std::string(str ? str : "");
+  }
   ErrorCode subscription (std::vector<std::string> &topics);
   ErrorCode subscribe (const std::vector<std::string> &topics);
   ErrorCode unsubscribe ();
   ErrorCode assign (const std::vector<TopicPartition*> &partitions);
   ErrorCode unassign ();
+  Error *incremental_assign (const std::vector<TopicPartition*> &partitions);
+  Error *incremental_unassign (const std::vector<TopicPartition*> &partitions);
 
   Message *consume (int timeout_ms);
   ErrorCode commitSync () {
@@ -1276,7 +1290,10 @@ class ConsumerImpl : virtual public Consumer, virtual public HandleImpl {
 class ProducerImpl : virtual public Producer, virtual public HandleImpl {
 
  public:
-  ~ProducerImpl () { if (rk_) rd_kafka_destroy(rk_); };
+  ~ProducerImpl () {
+    if (rk_)
+      rd_kafka_destroy(rk_);
+  };
 
   ErrorCode produce (Topic *topic, int32_t partition,
                      int msgflags,

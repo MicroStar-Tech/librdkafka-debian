@@ -35,7 +35,7 @@
  * The roundrobin assignor lays out all the available partitions and all the
  * available consumers. It then proceeds to do a roundrobin assignment from
  * partition to consumer. If the subscriptions of all consumer instances are
- * identical, then the partitions will be uniformly distributed. (i.e., the 
+ * identical, then the partitions will be uniformly distributed. (i.e., the
  * partition ownership counts will be within a delta of exactly one across all
  * consumers.)
  *
@@ -50,8 +50,8 @@
 
 rd_kafka_resp_err_t
 rd_kafka_roundrobin_assignor_assign_cb (rd_kafka_t *rk,
+				        const rd_kafka_assignor_t *rkas,
 					const char *member_id,
-					const char *protocol_name,
 					const rd_kafka_metadata_t *metadata,
 					rd_kafka_group_member_t *members,
 					size_t member_cnt,
@@ -82,20 +82,13 @@ rd_kafka_roundrobin_assignor_assign_cb (rd_kafka_t *rk,
 		     partition++) {
 			rd_kafka_group_member_t *rkgm;
 
-                        next = (next+1) % rd_list_cnt(&eligible_topic->members);
-
-			/* Scan through members until we find one with a
-			 * subscription to this topic. */
-			while (!rd_kafka_group_member_find_subscription(
-				       rk, &members[next],
-				       eligible_topic->metadata->topic)) {
-                                next++; /* The next-increment modulo check above
-                                         * ensures this increment does not
-                                         * run out of range. */
-                                rd_assert(next <
-                                          rd_list_cnt(&eligible_topic->
-                                                      members));
-                        }
+                        /* Scan through members until we find one with a
+                         * subscription to this topic. */
+                        do {
+                                next = (next+1) % member_cnt;
+                        } while (!rd_kafka_group_member_find_subscription(
+                                         rk, &members[next],
+                                         eligible_topic->metadata->topic));
 
 			rkgm = &members[next];
 
@@ -119,3 +112,14 @@ rd_kafka_roundrobin_assignor_assign_cb (rd_kafka_t *rk,
 
 
 
+/**
+ * @brief Initialzie and add roundrobin assignor.
+ */
+rd_kafka_resp_err_t rd_kafka_roundrobin_assignor_init (rd_kafka_t *rk) {
+        return rd_kafka_assignor_add(
+                rk, "consumer", "roundrobin",
+                RD_KAFKA_REBALANCE_PROTOCOL_EAGER,
+                rd_kafka_roundrobin_assignor_assign_cb,
+                rd_kafka_assignor_get_metadata_with_empty_userdata,
+                NULL, NULL, NULL, NULL);
+}

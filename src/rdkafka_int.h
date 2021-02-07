@@ -94,6 +94,7 @@ typedef struct rd_kafka_lwtopic_s rd_kafka_lwtopic_t;
 #include "rdkafka_metadata.h"
 #include "rdkafka_mock.h"
 #include "rdkafka_partition.h"
+#include "rdkafka_assignment.h"
 #include "rdkafka_coord.h"
 #include "rdkafka_mock.h"
 
@@ -470,6 +471,12 @@ struct rd_kafka_s {
                 /**< Partitions added and registered to transaction. */
                 rd_kafka_toppar_tqhead_t txn_rktps;
 
+                /**< Number of messages that failed delivery.
+                 *   If this number is >0 on transaction_commit then an
+                 *   abortable transaction error will be raised.
+                 *   Is reset to zero on each begin_transaction(). */
+                rd_atomic64_t txn_dr_fails;
+
                 /**< Current transaction error. */
                 rd_kafka_resp_err_t txn_err;
 
@@ -486,6 +493,23 @@ struct rd_kafka_s {
                 rd_kafka_timer_t    txn_coord_tmr;
         } rk_eos;
 
+
+        /**
+         * Consumer state
+         *
+         * @locality rdkafka main thread
+         * @locks_required none
+         */
+        struct {
+                /** Application consumer queue for messages, events and errors.
+                 *  (typically points to rkcg_q) */
+                rd_kafka_q_t *q;
+                /** Current assigned partitions through assign() et.al. */
+                rd_kafka_assignment_t assignment;
+                /** Waiting for this number of commits to finish. */
+                int wait_commit_cnt;
+        } rk_consumer;
+
         /**<
          * Coordinator cache.
          *
@@ -497,7 +521,6 @@ struct rd_kafka_s {
         TAILQ_HEAD(, rd_kafka_coord_req_s) rk_coord_reqs; /**< Coordinator
                                                            *   requests */
 
-	const rd_kafkap_bytes_t *rk_null_bytes;
 
 	struct {
 		mtx_t lock;       /* Protects acces to this struct */
@@ -812,6 +835,8 @@ const char *rd_kafka_purge_flags2str (int flags);
 #define RD_KAFKA_DBG_ADMIN          0x4000
 #define RD_KAFKA_DBG_EOS            0x8000
 #define RD_KAFKA_DBG_MOCK           0x10000
+#define RD_KAFKA_DBG_ASSIGNOR       0x20000
+#define RD_KAFKA_DBG_CONF           0x40000
 #define RD_KAFKA_DBG_ALL            0xfffff
 #define RD_KAFKA_DBG_NONE           0x0
 
@@ -909,8 +934,8 @@ rd_kafka_fatal_error_code (rd_kafka_t *rk) {
 extern rd_atomic32_t rd_kafka_thread_cnt_curr;
 extern char RD_TLS rd_kafka_thread_name[64];
 
-void rd_kafka_set_thread_name (const char *fmt, ...);
-void rd_kafka_set_thread_sysname (const char *fmt, ...);
+void rd_kafka_set_thread_name (const char *fmt, ...) RD_FORMAT(printf, 1, 2);
+void rd_kafka_set_thread_sysname (const char *fmt, ...) RD_FORMAT(printf, 1, 2);
 
 int rd_kafka_path_is_dir (const char *path);
 rd_bool_t rd_kafka_dir_is_empty (const char *path);

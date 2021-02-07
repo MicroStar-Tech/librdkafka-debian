@@ -47,7 +47,8 @@
 const char *rd_kafka_topic_state_names[] = {
         "unknown",
         "exists",
-        "notexists"
+        "notexists",
+        "error"
 };
 
 
@@ -119,7 +120,9 @@ void rd_kafka_topic_destroy_final (rd_kafka_topic_t *rkt) {
 }
 
 /**
- * Application destroy
+ * @brief Application topic object destroy.
+ * @warning MUST ONLY BE CALLED BY THE APPLICATION.
+ *          Use rd_kafka_topic_destroy0() for all internal use.
  */
 void rd_kafka_topic_destroy (rd_kafka_topic_t *app_rkt) {
         rd_kafka_lwtopic_t *lrkt;
@@ -263,6 +266,7 @@ rd_kafka_topic_t *rd_kafka_topic_new0 (rd_kafka_t *rk,
 	rd_kafka_topic_t *rkt;
         const struct rd_kafka_metadata_cache_entry *rkmce;
         const char *conf_err;
+        const char *used_conf_str;
 
 	/* Verify configuration.
 	 * Maximum topic name size + headers must never exceed message.max.bytes
@@ -289,10 +293,15 @@ rd_kafka_topic_t *rd_kafka_topic_new0 (rd_kafka_t *rk,
         }
 
         if (!conf) {
-                if (rk->rk_conf.topic_conf)
+                if (rk->rk_conf.topic_conf) {
                         conf = rd_kafka_topic_conf_dup(rk->rk_conf.topic_conf);
-                else
+                        used_conf_str = "default_topic_conf";
+                } else {
                         conf = rd_kafka_topic_conf_new();
+                        used_conf_str = "empty";
+                }
+        } else {
+                used_conf_str = "user-supplied";
         }
 
 
@@ -373,6 +382,21 @@ rd_kafka_topic_t *rd_kafka_topic_new0 (rd_kafka_t *rk,
                                 rd_kafka_msg_partitioner_consistent_random;
                 }
         }
+
+        if (rkt->rkt_rk->rk_conf.sticky_partition_linger_ms > 0 &&
+            rkt->rkt_conf.partitioner !=
+            rd_kafka_msg_partitioner_consistent &&
+            rkt->rkt_conf.partitioner !=
+            rd_kafka_msg_partitioner_murmur2 &&
+            rkt->rkt_conf.partitioner !=
+            rd_kafka_msg_partitioner_fnv1a) {
+                rkt->rkt_conf.random_partitioner = rd_false;
+        } else {
+                rkt->rkt_conf.random_partitioner = rd_true;
+        }
+
+        /* Sticky partition assignment interval */
+        rd_interval_init(&rkt->rkt_sticky_intvl);
 
         if (rkt->rkt_conf.queuing_strategy == RD_KAFKA_QUEUE_FIFO)
                 rkt->rkt_conf.msg_order_cmp = rd_kafka_msg_cmp_msgid;
@@ -456,6 +480,14 @@ rd_kafka_topic_t *rd_kafka_topic_new0 (rd_kafka_t *rk,
         if (do_lock)
                 rd_kafka_wrunlock(rk);
 
+        if (rk->rk_conf.debug & RD_KAFKA_DBG_CONF) {
+                char desc[256];
+                rd_snprintf(desc, sizeof(desc),
+                            "Topic \"%s\" configuration (%s)",
+                            topic, used_conf_str);
+                rd_kafka_anyconf_dump_dbg(rk, _RK_TOPIC, &rkt->rkt_conf, desc);
+        }
+
 	return rkt;
 }
 
@@ -504,6 +536,10 @@ static void rd_kafka_topic_set_state (rd_kafka_topic_t *rkt, int state) {
                      rkt->rkt_topic->str,
                      rd_kafka_topic_state_names[rkt->rkt_state],
                      rd_kafka_topic_state_names[state]);
+
+        if (rkt->rkt_state == RD_KAFKA_TOPIC_S_ERROR)
+                rkt->rkt_err = RD_KAFKA_RESP_ERR_NO_ERROR;
+
         rkt->rkt_state = state;
 }
 
@@ -599,7 +635,8 @@ static int rd_kafka_toppar_leader_update (rd_kafka_topic_t *rkt,
                                           int32_t leader_id,
                                           rd_kafka_broker_t *leader) {
 	rd_kafka_toppar_t *rktp;
-	int r;
+        rd_bool_t fetching_from_follower;
+        int r = 0;
 
 	rktp = rd_kafka_toppar_get(rkt, partition, 0);
         if (unlikely(!rktp)) {
@@ -616,10 +653,13 @@ static int rd_kafka_toppar_leader_update (rd_kafka_topic_t *rkt,
 
         rd_kafka_toppar_lock(rktp);
 
-        if (leader != NULL &&
-            rktp->rktp_broker != NULL &&
-            rktp->rktp_broker->rkb_source != RD_KAFKA_INTERNAL &&
-            rktp->rktp_broker != leader &&
+        fetching_from_follower =
+                leader != NULL &&
+                rktp->rktp_broker != NULL &&
+                rktp->rktp_broker->rkb_source != RD_KAFKA_INTERNAL &&
+                rktp->rktp_broker != leader;
+
+        if (fetching_from_follower &&
             rktp->rktp_leader_id == leader_id) {
                 rd_kafka_dbg(rktp->rktp_rkt->rkt_rk, TOPIC, "BROKER",
                         "Topic %s [%"PRId32"]: leader %"PRId32" unchanged, "
@@ -628,13 +668,21 @@ static int rd_kafka_toppar_leader_update (rd_kafka_topic_t *rkt,
                         rktp->rktp_partition,
                         leader_id, rktp->rktp_broker_id);
                 r = 0;
+
         } else {
-                rktp->rktp_leader_id = leader_id;
-                if (rktp->rktp_leader)
-                        rd_kafka_broker_destroy(rktp->rktp_leader);
-                if (leader)
-                        rd_kafka_broker_keep(leader);
-                rktp->rktp_leader = leader;
+
+                if (rktp->rktp_leader_id != leader_id ||
+                    rktp->rktp_leader != leader) {
+                        /* Update leader if it has changed */
+                        rktp->rktp_leader_id = leader_id;
+                        if (rktp->rktp_leader)
+                                rd_kafka_broker_destroy(rktp->rktp_leader);
+                        if (leader)
+                                rd_kafka_broker_keep(leader);
+                        rktp->rktp_leader = leader;
+                }
+
+                /* Update handling broker */
                 r = rd_kafka_toppar_broker_update(rktp, leader_id, leader,
                                                   "leader updated");
         }
@@ -771,10 +819,9 @@ static int rd_kafka_topic_partition_cnt_update (rd_kafka_topic_t *rkt,
                              "desired partition does not exist in cluster",
                              rkt->rkt_topic->str, rktp->rktp_partition);
                 rd_kafka_toppar_enq_error(rktp,
+                                          rkt->rkt_err ? rkt->rkt_err :
                                           RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION,
-                                          "desired partition does not exist "
-                                          "in cluster");
-
+                                          "desired partition is not available");
         }
 
 	/* Remove excessive partitions */
@@ -803,8 +850,10 @@ static int rd_kafka_topic_partition_cnt_update (rd_kafka_topic_t *rkt,
                         if (!rd_kafka_terminating(rkt->rkt_rk))
                                 rd_kafka_toppar_enq_error(
                                         rktp,
+                                        rkt->rkt_err ? rkt->rkt_err :
                                         RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION,
-                                        "desired partition no longer exists");
+                                        "desired partition is no longer "
+                                        "available");
 
 			rd_kafka_toppar_broker_delegate(rktp, NULL);
 
@@ -864,6 +913,7 @@ static void rd_kafka_topic_assign_uas (rd_kafka_topic_t *rkt,
 	rd_kafka_msg_t *rkm, *tmp;
 	rd_kafka_msgq_t uas = RD_KAFKA_MSGQ_INITIALIZER(uas);
 	rd_kafka_msgq_t failed = RD_KAFKA_MSGQ_INITIALIZER(failed);
+        rd_kafka_resp_err_t err_all = RD_KAFKA_RESP_ERR_NO_ERROR;
 	int cnt;
 
 	if (rkt->rkt_rk->rk_type != RD_KAFKA_PRODUCER)
@@ -880,25 +930,45 @@ static void rd_kafka_topic_assign_uas (rd_kafka_topic_t *rkt,
 	/* Assign all unassigned messages to new topics. */
         rd_kafka_toppar_lock(rktp_ua);
 
-        rd_kafka_dbg(rk, TOPIC, "PARTCNT",
-                     "Partitioning %i unassigned messages in topic %.*s to "
-                     "%"PRId32" partitions",
-                     rktp_ua->rktp_msgq.rkmq_msg_cnt,
-                     RD_KAFKAP_STR_PR(rkt->rkt_topic),
-                     rkt->rkt_partition_cnt);
+        if (rkt->rkt_state == RD_KAFKA_TOPIC_S_ERROR) {
+                err_all = rkt->rkt_err;
+                rd_kafka_dbg(rk, TOPIC, "PARTCNT",
+                             "Failing all %i unassigned messages in "
+                             "topic %.*s due to permanent topic error: %s",
+                             rktp_ua->rktp_msgq.rkmq_msg_cnt,
+                             RD_KAFKAP_STR_PR(rkt->rkt_topic),
+                             rd_kafka_err2str(err_all));
+        } else if (rkt->rkt_state == RD_KAFKA_TOPIC_S_NOTEXISTS) {
+                err_all = err;
+                rd_kafka_dbg(rk, TOPIC, "PARTCNT",
+                             "Failing all %i unassigned messages in "
+                             "topic %.*s since topic does not exist: %s",
+                             rktp_ua->rktp_msgq.rkmq_msg_cnt,
+                             RD_KAFKAP_STR_PR(rkt->rkt_topic),
+                             rd_kafka_err2str(err_all));
+        } else {
+                rd_kafka_dbg(rk, TOPIC, "PARTCNT",
+                             "Partitioning %i unassigned messages in "
+                             "topic %.*s to %"PRId32" partitions",
+                             rktp_ua->rktp_msgq.rkmq_msg_cnt,
+                             RD_KAFKAP_STR_PR(rkt->rkt_topic),
+                             rkt->rkt_partition_cnt);
+        }
 
 	rd_kafka_msgq_move(&uas, &rktp_ua->rktp_msgq);
 	cnt = uas.rkmq_msg_cnt;
 	rd_kafka_toppar_unlock(rktp_ua);
 
 	TAILQ_FOREACH_SAFE(rkm, &uas.rkmq_msgs, rkm_link, tmp) {
-		/* Fast-path for failing messages with forced partition */
-		if (rkm->rkm_partition != RD_KAFKA_PARTITION_UA &&
-		    rkm->rkm_partition >= rkt->rkt_partition_cnt &&
-		    rkt->rkt_state != RD_KAFKA_TOPIC_S_UNKNOWN) {
-			rd_kafka_msgq_enq(&failed, rkm);
-			continue;
-		}
+                /* Fast-path for failing messages with forced partition or
+                 * when all messages are to fail. */
+                if (err_all ||
+                    (rkm->rkm_partition != RD_KAFKA_PARTITION_UA &&
+                     rkm->rkm_partition >= rkt->rkt_partition_cnt &&
+                     rkt->rkt_state != RD_KAFKA_TOPIC_S_UNKNOWN)) {
+                        rd_kafka_msgq_enq(&failed, rkm);
+                        continue;
+                }
 
 		if (unlikely(rd_kafka_msg_partitioner(rkt, rkm, 0) != 0)) {
 			/* Desired partition not available */
@@ -916,10 +986,9 @@ static void rd_kafka_topic_assign_uas (rd_kafka_topic_t *rkt,
                              "%"PRId32"/%i messages failed partitioning "
                              "in topic %s",
                              failed.rkmq_msg_cnt, cnt, rkt->rkt_topic->str);
-		rd_kafka_dr_msgq(rkt, &failed,
-				 rkt->rkt_state == RD_KAFKA_TOPIC_S_NOTEXISTS ?
-				 err :
-				 RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION);
+                rd_kafka_dr_msgq(rkt, &failed,
+                                 err_all ? err_all :
+                                 RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION);
 	}
 
 	rd_kafka_toppar_destroy(rktp_ua); /* from get() */
@@ -984,6 +1053,49 @@ rd_bool_t rd_kafka_topic_set_notexists (rd_kafka_topic_t *rkt,
         return rd_true;
 }
 
+/**
+ * @brief Mark topic as errored, such as when topic authorization fails.
+ *
+ * @param err Propagate error using this error code.
+ *
+ * @returns true if the topic was marked as errored, else false.
+ *
+ * @locality any
+ * @locks topic_wrlock() MUST be held.
+ */
+rd_bool_t rd_kafka_topic_set_error (rd_kafka_topic_t *rkt,
+                                    rd_kafka_resp_err_t err) {
+
+        if (unlikely(rd_kafka_terminating(rkt->rkt_rk))) {
+                /* Dont update metadata while terminating. */
+                return rd_false;
+        }
+
+        rd_assert(err != RD_KAFKA_RESP_ERR_NO_ERROR);
+
+        /* Same error, ignore. */
+        if (rkt->rkt_state == RD_KAFKA_TOPIC_S_ERROR &&
+            rkt->rkt_err == err)
+                return rd_true;
+
+        rd_kafka_dbg(rkt->rkt_rk, TOPIC, "TOPICERROR",
+                     "Topic %s has permanent error: %s",
+                     rkt->rkt_topic->str, rd_kafka_err2str(err));
+
+        rd_kafka_topic_set_state(rkt, RD_KAFKA_TOPIC_S_ERROR);
+
+        rkt->rkt_err = err;
+
+        /* Update number of partitions */
+        rd_kafka_topic_partition_cnt_update(rkt, 0);
+
+        /* Purge messages with forced partition */
+        rd_kafka_topic_assign_uas(rkt, err);
+
+        return rd_true;
+}
+
+
 
 /**
  * @brief Update a topic from metadata.
@@ -1020,7 +1132,7 @@ rd_kafka_topic_metadata_update (rd_kafka_topic_t *rkt,
         }
 
         /* Look up brokers before acquiring rkt lock to preserve lock order */
-        partbrokers = rd_alloca(mdt->partition_cnt * sizeof(*partbrokers));
+        partbrokers = rd_malloc(mdt->partition_cnt * sizeof(*partbrokers));
 
 	for (j = 0 ; j < mdt->partition_cnt ; j++) {
 		if (mdt->partitions[j].leader == -1) {
@@ -1047,6 +1159,8 @@ rd_kafka_topic_metadata_update (rd_kafka_topic_t *rkt,
                 rd_kafka_topic_set_notexists(rkt, mdt->err);
         else if (mdt->partition_cnt > 0)
                 rd_kafka_topic_set_state(rkt, RD_KAFKA_TOPIC_S_EXISTS);
+        else if (mdt->err)
+                rd_kafka_topic_set_error(rkt, mdt->err);
 
 	/* Update number of partitions, but not if there are
 	 * (possibly intermittent) errors (e.g., "Leader not available"). */
@@ -1115,7 +1229,7 @@ rd_kafka_topic_metadata_update (rd_kafka_topic_t *rkt,
                 }
         }
 
-        /* If there was an update to the partitionts try to assign
+        /* If there was an update to the partitions try to assign
          * unassigned messages to new partitions, or fail them */
         if (upd > 0)
                 rd_kafka_topic_assign_uas(rkt, mdt->err ?
@@ -1129,6 +1243,7 @@ rd_kafka_topic_metadata_update (rd_kafka_topic_t *rkt,
 		if (partbrokers[j])
 			rd_kafka_broker_destroy(partbrokers[j]);
 
+        rd_free(partbrokers);
 
 	return upd;
 }
@@ -1438,11 +1553,13 @@ void rd_kafka_topic_scan_all (rd_kafka_t *rk, rd_ts_t now) {
         rd_kafka_rdunlock(rk);
 
         if (!rd_list_empty(&query_topics))
-                rd_kafka_metadata_refresh_topics(rk, NULL, &query_topics,
-                                                 rd_true/*force even if cached
-                                                          * info exists*/,
-                                                 rd_false/*!cgrp_update*/,
-                                                 "refresh unavailable topics");
+                rd_kafka_metadata_refresh_topics(
+                        rk, NULL, &query_topics,
+                        rd_true/*force even if cached
+                                * info exists*/,
+                        rk->rk_conf.allow_auto_create_topics,
+                        rd_false/*!cgrp_update*/,
+                        "refresh unavailable topics");
         rd_list_destroy(&query_topics);
 }
 
@@ -1487,13 +1604,14 @@ void *rd_kafka_topic_opaque (const rd_kafka_topic_t *app_rkt) {
 
                 opaque = rkt->rkt_conf.opaque;
 
-                rd_kafka_topic_destroy(rkt); /* loose refcnt from find() */
+                rd_kafka_topic_destroy0(rkt); /* loose refcnt from find() */
 
                 return opaque;
         }
 
         return app_rkt->rkt_conf.opaque;
 }
+
 
 int rd_kafka_topic_info_cmp (const void *_a, const void *_b) {
 	const rd_kafka_topic_info_t *a = _a, *b = _b;
@@ -1503,6 +1621,19 @@ int rd_kafka_topic_info_cmp (const void *_a, const void *_b) {
 		return r;
 
         return RD_CMP(a->partition_cnt, b->partition_cnt);
+}
+
+
+/**
+ * @brief string compare two topics.
+ *
+ * @param _a topic string (type char *)
+ * @param _b rd_kafka_topic_info_t * pointer.
+ */
+int rd_kafka_topic_info_topic_cmp (const void *_a, const void *_b) {
+        const char *a = _a;
+        const rd_kafka_topic_info_t *b = _b;
+        return strcmp(a, b->topic);
 }
 
 
@@ -1578,6 +1709,7 @@ void rd_kafka_topic_leader_query0 (rd_kafka_t *rk, rd_kafka_topic_t *rkt,
 
         rd_kafka_metadata_refresh_topics(rk, NULL, &topics,
                                          rd_false/*dont force*/,
+                                         rk->rk_conf.allow_auto_create_topics,
                                          rd_false/*!cgrp_update*/,
                                          "leader query");
 
@@ -1588,17 +1720,25 @@ void rd_kafka_topic_leader_query0 (rd_kafka_t *rk, rd_kafka_topic_t *rkt,
 
 /**
  * @brief Populate list \p topics with the topic names (strdupped char *) of
- *        all locally known topics.
+ *        all locally known or cached topics.
  *
+ * @param cache_cntp is an optional pointer to an int that will be set to the
+ *                   number of entries added to \p topics from the
+ *                   metadata cache.
  * @remark \p rk lock MUST NOT be held
  */
-void rd_kafka_local_topics_to_list (rd_kafka_t *rk, rd_list_t *topics) {
+void rd_kafka_local_topics_to_list (rd_kafka_t *rk, rd_list_t *topics,
+                                    int *cache_cntp) {
         rd_kafka_topic_t *rkt;
+        int cache_cnt;
 
         rd_kafka_rdlock(rk);
         rd_list_grow(topics, rk->rk_topic_cnt);
         TAILQ_FOREACH(rkt, &rk->rk_topics, rkt_link)
                 rd_list_add(topics, rd_strdup(rkt->rkt_topic->str));
+        cache_cnt = rd_kafka_metadata_cache_topics_to_list(rk, topics);
+        if (cache_cntp)
+                *cache_cntp = cache_cnt;
         rd_kafka_rdunlock(rk);
 }
 
@@ -1625,7 +1765,7 @@ void rd_ut_kafka_topic_set_topic_exists (rd_kafka_topic_t *rkt,
         }
 
         rd_kafka_wrlock(rkt->rkt_rk);
-        rd_kafka_metadata_cache_topic_update(rkt->rkt_rk, &mdt);
+        rd_kafka_metadata_cache_topic_update(rkt->rkt_rk, &mdt, rd_true);
         rd_kafka_topic_metadata_update(rkt, &mdt, rd_clock());
         rd_kafka_wrunlock(rkt->rkt_rk);
 }
