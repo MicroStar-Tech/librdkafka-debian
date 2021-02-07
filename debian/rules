@@ -5,10 +5,11 @@
 
 export DPKG_EXPORT_BUILDFLAGS=1
 export DEB_BUILD_MAINT_OPTIONS=hardening=+bindnow
+
 include /usr/share/dpkg/buildflags.mk
 
 %:
-	dh $@ --without systemd,autoreconf
+	dh $@
 
 override_dh_auto_configure:
 	# There is no --runstatedir=/run in configure, so we do it manually here.
