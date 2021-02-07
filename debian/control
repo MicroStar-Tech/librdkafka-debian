@@ -6,7 +6,7 @@ Uploaders:
  ChangZhuo Chen (陳昌倬) <czchen@debian.org>,
 Build-Depends:
  debhelper-compat (= 13),
- liblz4-dev (>= 0.0~r123),
+ liblz4-dev,
  libsasl2-dev,
  libssl-dev,
  libzstd-dev,
