@@ -108,15 +108,25 @@ typedef enum {
 				      * Reuses u.assign */
 	RD_KAFKA_OP_THROTTLE,        /* Throttle info */
 	RD_KAFKA_OP_NAME,            /* Request name */
+        RD_KAFKA_OP_CG_METADATA,     /**< Request consumer metadata */
 	RD_KAFKA_OP_OFFSET_RESET,    /* Offset reset */
         RD_KAFKA_OP_METADATA,        /* Metadata response */
         RD_KAFKA_OP_LOG,             /* Log */
         RD_KAFKA_OP_WAKEUP,          /* Wake-up signaling */
         RD_KAFKA_OP_CREATETOPICS,    /**< Admin: CreateTopics: u.admin_request*/
         RD_KAFKA_OP_DELETETOPICS,    /**< Admin: DeleteTopics: u.admin_request*/
-        RD_KAFKA_OP_CREATEPARTITIONS,/**< Admin: CreatePartitions: u.admin_request*/
+        RD_KAFKA_OP_CREATEPARTITIONS,/**< Admin: CreatePartitions:
+                                      *   u.admin_request*/
         RD_KAFKA_OP_ALTERCONFIGS,    /**< Admin: AlterConfigs: u.admin_request*/
-        RD_KAFKA_OP_DESCRIBECONFIGS, /**< Admin: DescribeConfigs: u.admin_request*/
+        RD_KAFKA_OP_DESCRIBECONFIGS, /**< Admin: DescribeConfigs:
+                                      *   u.admin_request*/
+        RD_KAFKA_OP_DELETERECORDS,   /**< Admin: DeleteRecords:
+                                      *   u.admin_request*/
+        RD_KAFKA_OP_DELETEGROUPS,    /**< Admin: DeleteGroups: u.admin_request*/
+        RD_KAFKA_OP_DELETECONSUMERGROUPOFFSETS, /**< Admin:
+                                                 *   DeleteConsumerGroupOffsets
+                                                 *   u.admin_request */
+        RD_KAFKA_OP_ADMIN_FANOUT,    /**< Admin: fanout request */
         RD_KAFKA_OP_ADMIN_RESULT,    /**< Admin API .._result_t */
         RD_KAFKA_OP_PURGE,           /**< Purge queues */
         RD_KAFKA_OP_CONNECT,         /**< Connect (to broker) */
@@ -124,6 +134,8 @@ typedef enum {
         RD_KAFKA_OP_MOCK,            /**< Mock cluster command */
         RD_KAFKA_OP_BROKER_MONITOR,    /**< Broker state change */
         RD_KAFKA_OP_TXN,             /**< Transaction command */
+        RD_KAFKA_OP_GET_REBALANCE_PROTOCOL, /**< Get rebalance protocol */
+        RD_KAFKA_OP_LEADERS,         /**< Partition leader query */
         RD_KAFKA_OP__END
 } rd_kafka_op_type_t;
 
@@ -192,6 +204,15 @@ typedef rd_kafka_op_res_t
         RD_WARN_UNUSED_RESULT;
 
 /**
+ * @brief Enumerates the assign op sub-types.
+ */
+typedef enum {
+        RD_KAFKA_ASSIGN_METHOD_ASSIGN,        /**< Absolute assign/unassign */
+        RD_KAFKA_ASSIGN_METHOD_INCR_ASSIGN,   /**< Incremental assign */
+        RD_KAFKA_ASSIGN_METHOD_INCR_UNASSIGN  /**< Incremental unassign */
+} rd_kafka_assign_method_t;
+
+/**
  * @brief Op callback type
  */
 typedef rd_kafka_op_res_t (rd_kafka_op_cb_t) (rd_kafka_t *rk,
@@ -201,10 +222,11 @@ typedef rd_kafka_op_res_t (rd_kafka_op_cb_t) (rd_kafka_t *rk,
 
 /* Forward declaration */
 struct rd_kafka_admin_worker_cbs;
+struct rd_kafka_admin_fanout_worker_cbs;
 
 
-#define RD_KAFKA_OP_TYPE_ASSERT(rko,type) \
-	rd_kafka_assert(NULL, (rko)->rko_type == (type) && # type)
+#define RD_KAFKA_OP_TYPE_ASSERT(rko,type)                               \
+        rd_assert(((rko)->rko_type & ~RD_KAFKA_OP_FLAGMASK) == (type))
 
 struct rd_kafka_op_s {
 	TAILQ_ENTRY(rd_kafka_op_s) rko_link;
@@ -214,6 +236,7 @@ struct rd_kafka_op_s {
 	int                   rko_flags;  /* See RD_KAFKA_OP_F_... above */
 	int32_t               rko_version;
 	rd_kafka_resp_err_t   rko_err;
+        rd_kafka_error_t     *rko_error;
 	int32_t               rko_len;    /* Depends on type, typically the
 					   * message length. */
         rd_kafka_prio_t       rko_prio;   /**< In-queue priority.
@@ -253,6 +276,8 @@ struct rd_kafka_op_s {
 
 		struct {
 			rd_kafka_topic_partition_list_t *partitions;
+                        /** Require stable (txn-commited) offsets */
+                        rd_bool_t require_stable;
 			int do_free; /* free .partitions on destroy() */
 		} offset_fetch;
 
@@ -275,15 +300,22 @@ struct rd_kafka_op_s {
 
 		struct {
 			rd_kafka_topic_partition_list_t *partitions;
+                        rd_kafka_assign_method_t method;
 		} assign; /* also used for GET_ASSIGNMENT */
 
-		struct {
-			rd_kafka_topic_partition_list_t *partitions;
-		} rebalance;
+                struct {
+                        rd_kafka_topic_partition_list_t *partitions;
+                } rebalance;
+
+                struct {
+                        const char *str;
+                } rebalance_protocol;
 
 		struct {
 			char *str;
 		} name;
+
+                rd_kafka_consumer_group_metadata_t *cg_metadata;
 
 		struct {
 			int64_t offset;
@@ -353,7 +385,7 @@ struct rd_kafka_op_s {
 
                 struct {
                         rd_kafka_AdminOptions_t options; /**< Copy of user's
-                                                          * options, or NULL */
+                                                          * options */
                         rd_ts_t abs_timeout;        /**< Absolute timeout
                                                      *   for this request. */
                         rd_kafka_timer_t tmr;       /**< Timeout timer */
@@ -384,6 +416,7 @@ struct rd_kafka_op_s {
                                 RD_KAFKA_ADMIN_STATE_INIT,
                                 RD_KAFKA_ADMIN_STATE_WAIT_BROKER,
                                 RD_KAFKA_ADMIN_STATE_WAIT_CONTROLLER,
+                                RD_KAFKA_ADMIN_STATE_WAIT_FANOUTS,
                                 RD_KAFKA_ADMIN_STATE_CONSTRUCT_REQUEST,
                                 RD_KAFKA_ADMIN_STATE_WAIT_RESPONSE,
                         } state;
@@ -394,12 +427,47 @@ struct rd_kafka_op_s {
                                             *   that needs to speak to a
                                             *   specific broker rather than
                                             *   the controller.
-                                            *   Defaults to -1:
-                                            *   look up and use controller. */
+                                            *   See RD_KAFKA_ADMIN_TARGET_..
+                                            *   for special values (coordinator,
+                                            *   fanout, etc).
+                                            */
+                        /** The type of coordinator to look up */
+                        rd_kafka_coordtype_t coordtype;
+                        /** Which coordinator to look up */
+                        char *coordkey;
 
                         /** Application's reply queue */
                         rd_kafka_replyq_t replyq;
                         rd_kafka_event_type_t reply_event_type;
+
+                        /** A collection of fanout child ops. */
+                        struct {
+                                /** The type of request being fanned out.
+                                 *  This is used for the ADMIN_RESULT. */
+                                rd_kafka_op_type_t reqtype;
+
+                                /** Worker callbacks, see rdkafka_admin.c */
+                                struct rd_kafka_admin_fanout_worker_cbs *cbs;
+
+                                /** Number of outstanding requests remaining to
+                                 *  wait for. */
+                                int outstanding;
+
+                                /** Incremental results from fanouts.
+                                 *  This list is pre-allocated to the number
+                                 *  of input objects and can thus be set
+                                 *  by index to retain original ordering. */
+                                rd_list_t results;
+
+                                /** Reply event type */
+                                rd_kafka_event_type_t reply_event_type;
+
+                        } fanout;
+
+                        /** A reference to the parent ADMIN_FANOUT op that
+                         *  spawned this op, if applicable. NULL otherwise. */
+                        struct rd_kafka_op_s *fanout_parent;
+
                 } admin_request;
 
                 struct {
@@ -422,6 +490,10 @@ struct rd_kafka_op_s {
                         void *opaque;     /**< Application's opaque as set by
                                            *   rd_kafka_AdminOptions_set_opaque
                                            */
+
+                        /** A reference to the parent ADMIN_FANOUT op that
+                         *  spawned this op, if applicable. NULL otherwise. */
+                        struct rd_kafka_op_s *fanout_parent;
                 } admin_result;
 
                 struct {
@@ -488,13 +560,57 @@ struct rd_kafka_op_s {
                 } broker_monitor;
 
                 struct {
-                        rd_kafka_error_t *error; /**< Error object */
-                        char *group_id; /**< Consumer group id for commits */
+                        /** Consumer group metadata for send_offsets_to.. */
+                        rd_kafka_consumer_group_metadata_t *cgmetadata;
+                        /** Consumer group id for AddOffsetsTo.. */
+                        char *group_id;
                         int   timeout_ms; /**< Operation timeout */
                         rd_ts_t abs_timeout; /**< Absolute time */
                         /**< Offsets to commit */
                         rd_kafka_topic_partition_list_t *offsets;
                 } txn;
+
+                struct {
+                        /* This struct serves two purposes, the fields
+                         * with "Request:" are used for the async workers state
+                         * while the "Reply:" fields is a separate reply
+                         * rko that is enqueued for the caller upon
+                         * completion or failure. */
+
+                        /** Request: Partitions to query.
+                         *  Reply:   Queried partitions with .err field set. */
+                        rd_kafka_topic_partition_list_t *partitions;
+
+                        /** Request: Absolute timeout */
+                        rd_ts_t ts_timeout;
+
+                        /** Request: Metadata query timer */
+                        rd_kafka_timer_t query_tmr;
+
+                        /** Request: Timeout timer */
+                        rd_kafka_timer_t timeout_tmr;
+
+                        /** Request: Enqueue op only once, used to (re)trigger
+                         *  metadata cache lookups, topic refresh, timeout. */
+                        struct rd_kafka_enq_once_s *eonce;
+
+                        /** Request: Caller's replyq */
+                        rd_kafka_replyq_t replyq;
+
+                        /** Request: Number of metadata queries made. */
+                        int query_cnt;
+
+                        /** Reply: Leaders (result)
+                         * (rd_kafka_partition_leader*) */
+                        rd_list_t *leaders;
+
+                        /** Reply: Callback on completion (or failure) */
+                        rd_kafka_op_cb_t *cb;
+
+                        /** Reply: Callback opaque */
+                        void *opaque;
+
+                } leaders;
 
         } rko_u;
 };
@@ -520,7 +636,10 @@ rd_kafka_op_t *rd_kafka_op_new_reply (rd_kafka_op_t *rko_orig,
 rd_kafka_op_t *rd_kafka_op_new_cb (rd_kafka_t *rk,
                                    rd_kafka_op_type_t type,
                                    rd_kafka_op_cb_t *cb);
-int rd_kafka_op_reply (rd_kafka_op_t *rko, rd_kafka_resp_err_t err);
+int rd_kafka_op_reply (rd_kafka_op_t *rko,
+                       rd_kafka_resp_err_t err);
+int rd_kafka_op_error_reply (rd_kafka_op_t *rko,
+                             rd_kafka_error_t *error);
 
 #define rd_kafka_op_set_prio(rko,prio) ((rko)->rko_prio = prio)
 
@@ -533,11 +652,13 @@ int rd_kafka_op_reply (rd_kafka_op_t *rko, rd_kafka_resp_err_t err);
 	} while (0)
 
 void rd_kafka_q_op_err (rd_kafka_q_t *rkq, rd_kafka_resp_err_t err,
-                        const char *fmt, ...);
+                        const char *fmt, ...)
+        RD_FORMAT(printf, 3, 4);
 void rd_kafka_consumer_err (rd_kafka_q_t *rkq, int32_t broker_id,
                             rd_kafka_resp_err_t err, int32_t version,
                             const char *topic, rd_kafka_toppar_t *rktp,
-                            int64_t offset, const char *fmt, ...);
+                            int64_t offset, const char *fmt, ...)
+        RD_FORMAT(printf, 8, 9);
 rd_kafka_op_t *rd_kafka_op_req0 (rd_kafka_q_t *destq,
                                  rd_kafka_q_t *recvq,
                                  rd_kafka_op_t *rko,
@@ -547,6 +668,7 @@ rd_kafka_op_t *rd_kafka_op_req (rd_kafka_q_t *destq,
                                 int timeout_ms);
 rd_kafka_op_t *rd_kafka_op_req2 (rd_kafka_q_t *destq, rd_kafka_op_type_t type);
 rd_kafka_resp_err_t rd_kafka_op_err_destroy (rd_kafka_op_t *rko);
+rd_kafka_error_t *rd_kafka_op_error_destroy (rd_kafka_op_t *rko);
 
 rd_kafka_op_res_t rd_kafka_op_call (rd_kafka_t *rk,
                                     rd_kafka_q_t *rkq, rd_kafka_op_t *rko)

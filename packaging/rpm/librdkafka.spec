@@ -82,6 +82,7 @@ rm -rf %{buildroot}
 %doc %{_docdir}/librdkafka/CONFIGURATION.md
 %doc %{_docdir}/librdkafka/INTRODUCTION.md
 %doc %{_docdir}/librdkafka/STATISTICS.md
+%doc %{_docdir}/librdkafka/CHANGELOG.md
 %doc %{_docdir}/librdkafka/LICENSES.txt
 
 %defattr(-,root,root)
@@ -94,6 +95,7 @@ rm -rf %{buildroot}
 %{_includedir}/librdkafka
 %defattr(444,root,root)
 %{_libdir}/librdkafka.a
+%{_libdir}/librdkafka-static.a
 %{_libdir}/librdkafka.so
 %{_libdir}/librdkafka++.a
 %{_libdir}/librdkafka++.so

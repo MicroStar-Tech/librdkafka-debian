@@ -13,6 +13,11 @@ the producer and 3 million msgs/second for the consumer.
 
 **librdkafka** is licensed under the 2-clause BSD license.
 
+KAFKA is a registered trademark of The Apache Software Foundation and
+has been licensed for use by librdkafka. librdkafka has no
+affiliation with and is not endorsed by The Apache Software Foundation.
+
+
 # Features #
   * Full Exactly-Once-Semantics (EOS) support
   * High-level producer, including Idempotent and Transactional producers
@@ -88,7 +93,7 @@ $ ./vcpkg integrate install
 $ vcpkg install librdkafka
 ```
 
-The librdkafka paackage in vcpkg is kept up to date by Microsoft team members and community contributors.
+The librdkafka package in vcpkg is kept up to date by Microsoft team members and community contributors.
 If the version is out of date, please [create an issue or pull request](https://github.com/Microsoft/vcpkg) on the vcpkg repository.
 
 
@@ -163,6 +168,7 @@ Questions and discussions are also welcome on the [Confluent Community slack](ht
 
   * C#/.NET: [confluent-kafka-dotnet](https://github.com/confluentinc/confluent-kafka-dotnet) (based on [rdkafka-dotnet](https://github.com/ah-/rdkafka-dotnet))
   * C++: [cppkafka](https://github.com/mfontanini/cppkafka)
+  * C++: [modern-cpp-kafka](https://github.com/Morgan-Stanley/modern-cpp-kafka)
   * Common Lisp: [cl-rdkafka](https://github.com/SahilKang/cl-rdkafka)
   * D (C-like): [librdkafka](https://github.com/DlangApache/librdkafka/)
   * D (C++-like): [librdkafkad](https://github.com/tamediadigital/librdkafka-d)

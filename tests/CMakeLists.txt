@@ -104,6 +104,15 @@ set(
     0110-batch_size.cpp
     0111-delay_create_topics.cpp
     0112-assign_unknown_part.c
+    0113-cooperative_rebalance.cpp
+    0114-sticky_partitioning.cpp
+    0115-producer_auth.cpp
+    0116-kafkaconsumer_close.cpp
+    0117-mock_errors.c
+    0118-commit_rebalance.c
+    0119-consumer_auth.cpp
+    0120-asymmetric_subscription.c
+    0121-clusterid.c
     8000-idle.cpp
     test.c
     testcpp.cpp

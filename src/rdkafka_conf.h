@@ -219,14 +219,13 @@ struct rd_kafka_conf_s {
 	char   *broker_version_fallback;
 	rd_kafka_secproto_t security_protocol;
 
-#if WITH_SSL
         struct {
+#if WITH_SSL
                 SSL_CTX *ctx;
+#endif
                 char *cipher_suites;
-#if OPENSSL_VERSION_NUMBER >= 0x1000200fL && !defined(LIBRESSL_VERSION_NUMBER)
                 char *curves_list;
                 char *sigalgs_list;
-#endif
                 char *key_location;
                 char *key_pem;
                 rd_kafka_cert_t *key;
@@ -236,6 +235,8 @@ struct rd_kafka_conf_s {
                 rd_kafka_cert_t *cert;
                 char *ca_location;
                 rd_kafka_cert_t *ca;
+                /** CSV list of Windows certificate stores */
+                char *ca_cert_stores;
                 char *crl_location;
                 char *keystore_location;
                 char *keystore_password;
@@ -250,7 +251,6 @@ struct rd_kafka_conf_s {
                                        char *errstr, size_t errstr_size,
                                        void *opaque);
         } ssl;
-#endif
 
         struct {
                 const struct rd_kafka_sasl_provider *provider;
@@ -272,20 +272,17 @@ struct rd_kafka_conf_s {
                 /* Hash size */
                 size_t         scram_H_size;
 #endif
-#if WITH_SASL_OAUTHBEARER
                 char *oauthbearer_config;
                 int   enable_oauthbearer_unsecure_jwt;
-
                 /* SASL/OAUTHBEARER token refresh event callback */
                 void (*oauthbearer_token_refresh_cb) (
                         rd_kafka_t *rk,
                         const char *oauthbearer_config,
                         void *opaque);
-#endif
         } sasl;
 
-#if WITH_PLUGINS
         char *plugin_paths;
+#if WITH_PLUGINS
         rd_list_t plugins;
 #endif
 
@@ -345,7 +342,6 @@ struct rd_kafka_conf_s {
         char *partition_assignment_strategy;
         rd_list_t partition_assignors;
 	int enabled_assignor_cnt;
-        struct rd_kafka_assignor_s *assignor;
 
         void (*rebalance_cb) (rd_kafka_t *rk,
                               rd_kafka_resp_err_t err,
@@ -392,7 +388,8 @@ struct rd_kafka_conf_s {
 	int    batch_num_messages;
         int    batch_size;
 	rd_kafka_compression_t compression_codec;
-	int    dr_err_only;
+        int    dr_err_only;
+        int    sticky_partition_linger_ms;
 
 	/* Message delivery report callback.
 	 * Called once for each produced message, either on
@@ -532,6 +529,9 @@ struct rd_kafka_topic_conf_s {
 				void *msg_opaque);
         char   *partitioner_str;
 
+        rd_bool_t random_partitioner; /**< rd_true - random
+                                        *  rd_false - sticky */
+
         int queuing_strategy; /* RD_KAFKA_QUEUE_FIFO|LIFO */
         int (*msg_order_cmp) (const void *a, const void *b);
 
@@ -567,12 +567,14 @@ void rd_kafka_topic_conf_desensitize (rd_kafka_topic_conf_t *tconf);
 const char *rd_kafka_conf_finalize (rd_kafka_type_t cltype,
                                     rd_kafka_conf_t *conf);
 const char *rd_kafka_topic_conf_finalize (rd_kafka_type_t cltype,
-                                          rd_kafka_conf_t *conf,
+                                          const rd_kafka_conf_t *conf,
                                           rd_kafka_topic_conf_t *tconf);
 
 
 int rd_kafka_conf_warn (rd_kafka_t *rk);
 
+void rd_kafka_anyconf_dump_dbg (rd_kafka_t *rk, int scope, const void *conf,
+                                const char *description);
 
 #include "rdkafka_confval.h"
 
