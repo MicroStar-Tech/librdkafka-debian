@@ -3,7 +3,7 @@ Upstream-Name: librdkafka
 Source: https://github.com/edenhill/librdkafka
 
 Files: *
-Copyright: 2012-2015, Magnus Edenhill
+Copyright: 2012-2020, Magnus Edenhill
 License: BSD-2-clause
 
 Files: src/rdcrc32.c src/rdcrc32.h
@@ -73,7 +73,7 @@ License: public-domain
   obligation to do anything else, although I appreciate attribution.
 
 Files: debian/*
-Copyright: 2013 Faidon Liambotis <paravoid@debian.org>
+Copyright: 2013-2021 Faidon Liambotis <paravoid@debian.org>
            2019-2020 ChangZhuo Chen (陳昌倬) <czchen@debian.org>
 License: BSD-2-clause
 
