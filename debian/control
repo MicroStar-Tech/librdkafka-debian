@@ -11,6 +11,7 @@ Build-Depends:
  libssl-dev,
  libzstd-dev,
  python3,
+ rapidjson-dev,
  zlib1g-dev,
 Standards-Version: 4.5.1
 Rules-Requires-Root: no
