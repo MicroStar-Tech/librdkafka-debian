@@ -7,4 +7,3 @@ usr/lib/*/librdkafka.a
 usr/lib/*/librdkafka.so
 usr/lib/*/pkgconfig/rdkafka++.pc
 usr/lib/*/pkgconfig/rdkafka.pc
-usr/share/doc/librdkafka/*
