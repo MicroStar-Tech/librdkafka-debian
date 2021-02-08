@@ -1,0 +1,3 @@
+Tests: unittest
+Depends: librdkafka-dev, build-essential, pkg-config
+Restrictions: allow-stderr
