@@ -26,9 +26,9 @@ Multi-Arch: same
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Description: library implementing the Apache Kafka protocol
  librdkafka is a C library implementation of the Apache Kafka protocol,
- containing both Producer and Consumer support. It was designed with message
- delivery reliability and high performance in mind, current figures exceed
- 800000 msgs/second for the producer and 3 million msgs/second for the
+ providing Producer, Consumer and Admin clients. It was designed with message
+ delivery reliability and high performance in mind, current figures exceed 1
+ million msgs/second for the producer and 3 million msgs/second for the
  consumer.
  .
  More information about Apache Kafka can be found at http://kafka.apache.org/
@@ -41,9 +41,9 @@ Multi-Arch: same
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Description: library implementing the Apache Kafka protocol (C++ bindings)
  librdkafka is a C library implementation of the Apache Kafka protocol,
- containing both Producer and Consumer support. It was designed with message
- delivery reliability and high performance in mind, current figures exceed
- 800000 msgs/second for the producer and 3 million msgs/second for the
+ providing Producer, Consumer and Admin clients. It was designed with message
+ delivery reliability and high performance in mind, current figures exceed 1
+ million msgs/second for the producer and 3 million msgs/second for the
  consumer.
  .
  More information about Apache Kafka can be found at http://kafka.apache.org/
@@ -60,9 +60,9 @@ Depends:
  ${misc:Depends}
 Description: library implementing the Apache Kafka protocol (development headers)
  librdkafka is a C library implementation of the Apache Kafka protocol,
- containing both Producer and Consumer support. It was designed with message
- delivery reliability and high performance in mind, current figures exceed
- 800000 msgs/second for the producer and 3 million msgs/second for the
+ providing Producer, Consumer and Admin clients. It was designed with message
+ delivery reliability and high performance in mind, current figures exceed 1
+ million msgs/second for the producer and 3 million msgs/second for the
  consumer.
  .
  More information about Apache Kafka can be found at http://kafka.apache.org/
