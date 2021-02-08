@@ -1,3 +1,34 @@
+librdkafka (1.6.0-1) unstable; urgency=medium
+
+  * New upstream release.
+    - Update librdkafka1.symbols for new symbols.
+  * Drop versioned depends on liblz4-dev, satisfied by version in oldstable.
+  * Add build dependency to rapidjson-dev, used in tests.
+  * Cherry-pick /usr/share/doc files, addressing issues like duplicate files
+    and cruft and associated lintian warnings (duplicate-changelog-files,
+    extra-license-file).
+  * Move documentation files to librdkafka-dev.docs (from .install) so that
+    they are skipped in builds with the "nodoc" profile.
+  * Remove dh_missing override, as the options are now defaults in
+    compatibility level 13.
+  * Remove a couple of --without from dh, as debhelper is smart enough to
+    figure it out on its own.
+  * d/copyright:
+    - Update copyright years to include 2021.
+    - Add a lot more stanzas, based on LICENSES.txt.
+  * Add autopkgtests:
+    - One that builds and runs a couple of examples, in C/C++
+    - One that builds and runs a program that calls the library's
+      rd_kafka_unittest symbol to perform testing under CI.
+  * Update packages description with the text from upstream, that includes new
+    capabilities (Admin client) and performance figures (800k -> 1 million
+    msgs/sec).
+  * Fix syntax for upstream metadata, and drop Name.
+  * Bump Standards-Version to 4.5.1, no changes.
+  * Bump watchfile to v4, no changes.
+
+ -- Faidon Liambotis <paravoid@debian.org>  Mon, 08 Feb 2021 05:40:28 +0200
+
 librdkafka (1.5.0-2) unstable; urgency=medium
 
   [ Adrian Bunk ]
