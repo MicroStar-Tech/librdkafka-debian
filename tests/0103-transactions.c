@@ -125,6 +125,11 @@ static void do_test_basic_producer_txn (rd_bool_t enable_compression) {
         rd_kafka_conf_t *conf, *p_conf, *c_conf;
         int i;
 
+        /* Mark one of run modes as quick so we don't run both when
+         * in a hurry.*/
+        SUB_TEST0(enable_compression /* quick */,
+                  "with%s compression", enable_compression ? "" : "out");
+
         test_conf_init(&conf, NULL, 30);
 
         /* Create producer */
@@ -160,7 +165,7 @@ static void do_test_basic_producer_txn (rd_bool_t enable_compression) {
         /* Wait for assignment to make sure consumer is fetching messages
          * below, so we can use the poll_no_msgs() timeout to
          * determine that messages were indeed aborted. */
-        test_consumer_wait_assignment(c);
+        test_consumer_wait_assignment(c, rd_true);
 
         /* Init transactions */
         TEST_CALL_ERROR__(rd_kafka_init_transactions(p, 30*1000));
@@ -247,6 +252,8 @@ static void do_test_basic_producer_txn (rd_bool_t enable_compression) {
 
         test_consumer_close(c);
         rd_kafka_destroy(c);
+
+        SUB_TEST_PASS();
 }
 
 
@@ -314,8 +321,7 @@ void do_test_consumer_producer_txn (void) {
         int committed_msgcnt = 0;
         test_msgver_t expect_mv, actual_mv;
 
-        TEST_SAY(_C_BLU "[ Transactional test with %d transactions ]\n",
-                 txncnt);
+        SUB_TEST_QUICK("transactional test with %d transactions", txncnt);
 
         test_conf_init(&conf, NULL, 30);
 
@@ -514,6 +520,8 @@ void do_test_consumer_producer_txn (void) {
 
         rd_free(input_topic);
         rd_free(output_topic);
+
+        SUB_TEST_PASS();
 }
 
 
@@ -532,7 +540,8 @@ static void do_test_misuse_txn (void) {
         /*
          * transaction.timeout.ms out of range (from broker's point of view)
          */
-        TEST_SAY("[ Test out-of-range transaction.timeout.ms ]\n");
+        SUB_TEST_QUICK();
+
         test_conf_init(&conf, NULL, 10);
 
         test_conf_set(conf, "transactional.id", topic);
@@ -605,7 +614,8 @@ static void do_test_misuse_txn (void) {
 
         error = rd_kafka_init_transactions(p, 1);
         TEST_ASSERT(error, "Expected init_transactions() to fail");
-        TEST_SAY("error: %s, %d\n", rd_kafka_error_string(error), rd_kafka_error_is_retriable(error));
+        TEST_SAY("error: %s, %d\n", rd_kafka_error_string(error),
+                 rd_kafka_error_is_retriable(error));
         TEST_ASSERT(rd_kafka_error_code(error) == RD_KAFKA_RESP_ERR__TIMED_OUT,
                     "Expected ERR__TIMED_OUT, not %s: %s",
                     rd_kafka_error_name(error),
@@ -663,6 +673,8 @@ static void do_test_misuse_txn (void) {
         TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
 
         rd_kafka_destroy(p);
+
+        SUB_TEST_PASS();
 }
 
 
@@ -767,6 +779,389 @@ static void do_test_fenced_txn (rd_bool_t produce_after_fence) {
         SUB_TEST_PASS();
 }
 
+
+
+/**
+ * @brief Check that fatal idempotent producer errors are also fatal
+ *        transactional errors when KIP-360 is not supported.
+ */
+static void do_test_fatal_idempo_error_without_kip360 (void) {
+        const char *topic = test_mk_topic_name("0103_fatal_idempo", 1);
+        const int32_t partition = 0;
+        rd_kafka_conf_t *conf, *c_conf;
+        rd_kafka_t *p, *c;
+        rd_kafka_error_t *error;
+        uint64_t testid;
+        const int msgcnt[3] = { 6, 4, 1 };
+        rd_kafka_topic_partition_list_t *records;
+        test_msgver_t expect_mv, actual_mv;
+        /* This test triggers UNKNOWN_PRODUCER_ID on AK <2.4 and >2.4, but
+         * not on AK 2.4.
+         * On AK <2.5 (pre KIP-360) these errors are unrecoverable,
+         * on AK >2.5 (with KIP-360) we can recover.
+         * Since 2.4 is not behaving as the other releases we skip it here. */
+        rd_bool_t expect_fail = test_broker_version < TEST_BRKVER(2,5,0,0);
+
+        SUB_TEST_QUICK("%s",
+                       expect_fail ?
+                       "expecting failure since broker is < 2.5" :
+                       "not expecting failure since broker is >= 2.5");
+
+        if (test_broker_version >= TEST_BRKVER(2,4,0,0) &&
+            test_broker_version < TEST_BRKVER(2,5,0,0))
+                SUB_TEST_SKIP("can't trigger UNKNOWN_PRODUCER_ID on AK 2.4");
+
+        if (expect_fail)
+                test_curr->is_fatal_cb = test_error_is_not_fatal_cb;
+        test_curr->ignore_dr_err = expect_fail;
+
+        testid = test_id_generate();
+
+        /* Keep track of what messages to expect on the output topic */
+        test_msgver_init(&expect_mv, testid);
+
+        test_conf_init(&conf, NULL, 30);
+
+        test_conf_set(conf, "transactional.id", topic);
+        test_conf_set(conf, "batch.num.messages", "1");
+        rd_kafka_conf_set_dr_msg_cb(conf, test_dr_msg_cb);
+
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        test_create_topic(p, topic, 1, 3);
+
+
+        TEST_CALL_ERROR__(rd_kafka_init_transactions(p, 30*1000));
+
+        /*
+         * 3 transactions:
+         *  1. Produce some messages, commit.
+         *  2. Produce some messages, then delete the messages from txn 1 and
+         *     then produce some more messages: UNKNOWN_PRODUCER_ID should be
+         *     raised as a fatal error.
+         *  3. Start a new transaction, produce and commit some new messages.
+         *     (this step is only performed when expect_fail is false).
+         */
+
+        /*
+         * Transaction 1
+         */
+        TEST_SAY(_C_BLU "Transaction 1: %d msgs\n", msgcnt[0]);
+        TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
+        test_produce_msgs2(p, topic, testid, partition, 0,
+                           msgcnt[0], NULL, 0);
+        TEST_CALL_ERROR__(rd_kafka_commit_transaction(p, -1));
+
+
+        /*
+         * Transaction 2
+         */
+        TEST_SAY(_C_BLU "Transaction 2: %d msgs\n", msgcnt[1]);
+        TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
+
+        /* Now delete the messages from txn1 */
+        TEST_SAY("Deleting records < %s [%"PRId32"] offset %d+1\n",
+                 topic, partition, msgcnt[0]);
+        records = rd_kafka_topic_partition_list_new(1);
+        rd_kafka_topic_partition_list_add(records, topic, partition)->offset =
+                msgcnt[0]; /* include the control message too */
+
+        TEST_CALL_ERR__(test_DeleteRecords_simple(p,
+                                                  NULL,
+                                                  records,
+                                                  NULL));
+        rd_kafka_topic_partition_list_destroy(records);
+
+        /* Wait for deletes to propagate */
+        rd_sleep(2);
+
+        if (!expect_fail)
+                test_curr->dr_mv = &expect_mv;
+
+        /* Produce more messages, should now fail */
+        test_produce_msgs2(p, topic, testid, partition, 0,
+                           msgcnt[1], NULL, 0);
+
+        error = rd_kafka_commit_transaction(p, -1);
+
+        TEST_SAY_ERROR(error, "commit_transaction() returned: ");
+
+        if (expect_fail) {
+                TEST_ASSERT(error != NULL,
+                            "Expected transaction to fail");
+                TEST_ASSERT(rd_kafka_error_txn_requires_abort(error),
+                            "Expected abortable error");
+                rd_kafka_error_destroy(error);
+
+                /* Now abort transaction, which should raise the fatal error
+                 * since it is the abort that performs the PID reinitialization.
+                 */
+                error = rd_kafka_abort_transaction(p, -1);
+                TEST_SAY_ERROR(error, "abort_transaction() returned: ");
+                TEST_ASSERT(error != NULL,
+                            "Expected abort to fail");
+                TEST_ASSERT(rd_kafka_error_is_fatal(error),
+                            "Expecting fatal error");
+                TEST_ASSERT(!rd_kafka_error_is_retriable(error),
+                            "Did not expect retriable error");
+                TEST_ASSERT(!rd_kafka_error_txn_requires_abort(error),
+                            "Did not expect abortable error");
+
+                rd_kafka_error_destroy(error);
+
+        } else {
+                TEST_ASSERT(!error, "Did not expect commit to fail: %s",
+                            rd_kafka_error_string(error));
+        }
+
+
+        if (!expect_fail) {
+                /*
+                 * Transaction 3
+                 */
+                TEST_SAY(_C_BLU "Transaction 3: %d msgs\n", msgcnt[2]);
+                test_curr->dr_mv = &expect_mv;
+                TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
+                test_produce_msgs2(p, topic, testid, partition, 0,
+                                   msgcnt[2], NULL, 0);
+                TEST_CALL_ERROR__(rd_kafka_commit_transaction(p, -1));
+        }
+
+        rd_kafka_destroy(p);
+
+        /* Consume messages.
+         * On AK<2.5 (expect_fail=true) we do not expect to see any messages
+         * since the producer will have failed with a fatal error.
+         * On AK>=2.5 (expect_fail=false) we should only see messages from
+         * txn 3 which are sent after the producer has recovered.
+         */
+
+        test_conf_init(&c_conf, NULL, 0);
+        test_conf_set(c_conf, "enable.partition.eof", "true");
+        c = test_create_consumer(topic, NULL, c_conf, NULL);
+        test_consumer_assign_partition("consume",
+                                       c, topic, partition,
+                                       RD_KAFKA_OFFSET_BEGINNING);
+
+        test_msgver_init(&actual_mv, testid);
+        test_msgver_ignore_eof(&actual_mv);
+
+        test_consumer_poll("Verify output topic", c, testid,
+                           1, 0, -1, &actual_mv);
+
+        test_msgver_verify_compare("Verify output topic",
+                                   &actual_mv, &expect_mv,
+                                   TEST_MSGVER_ALL);
+
+        test_msgver_clear(&actual_mv);
+        test_msgver_clear(&expect_mv);
+
+        rd_kafka_destroy(c);
+
+        SUB_TEST_PASS();
+}
+
+
+/**
+ * @brief Check that empty transactions, with no messages produced, work
+ *        as expected.
+ */
+static void do_test_empty_txn (rd_bool_t send_offsets, rd_bool_t do_commit) {
+        const char *topic = test_mk_topic_name("0103_empty_txn", 1);
+        rd_kafka_conf_t *conf, *c_conf;
+        rd_kafka_t *p, *c;
+        uint64_t testid;
+        const int msgcnt = 10;
+        rd_kafka_topic_partition_list_t *committed;
+        int64_t offset;
+
+        SUB_TEST_QUICK("%ssend offsets, %s",
+                       send_offsets ? "" : "don't ",
+                       do_commit ? "commit" : "abort");
+
+        testid = test_id_generate();
+
+        test_conf_init(&conf, NULL, 30);
+        c_conf = rd_kafka_conf_dup(conf);
+
+        test_conf_set(conf, "transactional.id", topic);
+        rd_kafka_conf_set_dr_msg_cb(conf, test_dr_msg_cb);
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        test_create_topic(p, topic, 1, 3);
+
+        /* Produce some non-txnn messages for the consumer to read and commit */
+        test_produce_msgs_easy(topic, testid, 0, msgcnt);
+
+        /* Create consumer and subscribe to the topic */
+        test_conf_set(c_conf, "auto.offset.reset", "earliest");
+        test_conf_set(c_conf, "enable.auto.commit", "false");
+        c = test_create_consumer(topic, NULL, c_conf, NULL);
+        test_consumer_subscribe(c, topic);
+        test_consumer_wait_assignment(c, rd_false);
+
+        TEST_CALL_ERROR__(rd_kafka_init_transactions(p, -1));
+
+        TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
+
+        /* send_offsets? Consume messages and send those offsets to the txn */
+        if (send_offsets) {
+                rd_kafka_topic_partition_list_t *offsets;
+                rd_kafka_consumer_group_metadata_t *cgmetadata;
+
+                test_consumer_poll("consume", c, testid, -1, 0, msgcnt, NULL);
+
+                TEST_CALL_ERR__(rd_kafka_assignment(c, &offsets));
+                TEST_CALL_ERR__(rd_kafka_position(c, offsets));
+
+                cgmetadata = rd_kafka_consumer_group_metadata(c);
+                TEST_ASSERT(cgmetadata != NULL,
+                            "failed to get consumer group metadata");
+
+                TEST_CALL_ERROR__(
+                        rd_kafka_send_offsets_to_transaction(
+                                p, offsets, cgmetadata, -1));
+
+                rd_kafka_consumer_group_metadata_destroy(cgmetadata);
+
+                rd_kafka_topic_partition_list_destroy(offsets);
+        }
+
+
+        if (do_commit)
+                TEST_CALL_ERROR__(rd_kafka_commit_transaction(p, -1));
+        else
+                TEST_CALL_ERROR__(rd_kafka_abort_transaction(p, -1));
+
+        /* Get the committed offsets */
+        TEST_CALL_ERR__(rd_kafka_assignment(c, &committed));
+        TEST_CALL_ERR__(rd_kafka_committed(c, committed, 10*1000));
+
+        TEST_ASSERT(committed->cnt == 1,
+                    "expected one committed offset, not %d",
+                    committed->cnt);
+        offset = committed->elems[0].offset;
+        TEST_SAY("Committed offset is %"PRId64"\n", offset);
+
+        if (do_commit && send_offsets)
+                TEST_ASSERT(offset >= msgcnt,
+                            "expected committed offset >= %d, got %"PRId64,
+                            msgcnt, offset);
+        else
+                TEST_ASSERT(offset < 0,
+                            "expected no committed offset, got %"PRId64,
+                            offset);
+
+        rd_kafka_topic_partition_list_destroy(committed);
+
+        rd_kafka_destroy(c);
+        rd_kafka_destroy(p);
+
+        SUB_TEST_PASS();
+}
+
+/**
+ * @returns the high watermark for the given partition.
+ */
+int64_t query_hi_wmark0 (int line,
+                         rd_kafka_t *c, const char *topic, int32_t partition) {
+        rd_kafka_resp_err_t err;
+        int64_t lo = -1, hi = -1;
+
+        err = rd_kafka_query_watermark_offsets(c, topic, partition, &lo, &hi,
+                                               tmout_multip(5*1000));
+        TEST_ASSERT(!err,
+                    "%d: query_watermark_offsets(%s) failed: %s",
+                    line, topic, rd_kafka_err2str(err));
+
+        return hi;
+}
+#define query_hi_wmark(c,topic,part) query_hi_wmark0(__LINE__,c,topic,part)
+
+/**
+ * @brief Check that isolation.level works as expected for query_watermark..().
+ */
+static void do_test_wmark_isolation_level (void) {
+        const char *topic = test_mk_topic_name("0103_wmark_isol", 1);
+        rd_kafka_conf_t *conf, *c_conf;
+        rd_kafka_t *p, *c1, *c2;
+        uint64_t testid;
+        int64_t hw_uncommitted, hw_committed;
+
+        SUB_TEST_QUICK();
+
+        testid = test_id_generate();
+
+        test_conf_init(&conf, NULL, 30);
+        c_conf = rd_kafka_conf_dup(conf);
+
+        test_conf_set(conf, "transactional.id", topic);
+        rd_kafka_conf_set_dr_msg_cb(conf, test_dr_msg_cb);
+        p = test_create_handle(RD_KAFKA_PRODUCER, rd_kafka_conf_dup(conf));
+
+        test_create_topic(p, topic, 1, 3);
+
+        /* Produce some non-txn messages to avoid 0 as the committed hwmark */
+        test_produce_msgs_easy(topic, testid, 0, 100);
+
+        /* Create consumer and subscribe to the topic */
+        test_conf_set(c_conf, "isolation.level", "read_committed");
+        c1 = test_create_consumer(topic, NULL, rd_kafka_conf_dup(c_conf), NULL);
+        test_conf_set(c_conf, "isolation.level", "read_uncommitted");
+        c2 = test_create_consumer(topic, NULL, c_conf, NULL);
+
+        TEST_CALL_ERROR__(rd_kafka_init_transactions(p, -1));
+
+        TEST_CALL_ERROR__(rd_kafka_begin_transaction(p));
+
+        /* Produce some txn messages */
+        test_produce_msgs2(p, topic, testid, 0, 0, 100, NULL, 0);
+
+        test_flush(p, 10*1000);
+
+        hw_committed = query_hi_wmark(c1, topic, 0);
+        hw_uncommitted = query_hi_wmark(c2, topic, 0);
+
+        TEST_SAY("Pre-commit hwmarks: committed %"PRId64
+                 ", uncommitted %"PRId64"\n",
+                 hw_committed, hw_uncommitted);
+
+        TEST_ASSERT(hw_committed > 0 && hw_committed < hw_uncommitted,
+                    "Committed hwmark %"PRId64" should be lower than "
+                    "uncommitted hwmark %"PRId64" for %s [0]",
+                    hw_committed, hw_uncommitted, topic);
+
+        TEST_CALL_ERROR__(rd_kafka_commit_transaction(p, -1));
+
+        /* Re-create the producer and re-init transactions to make
+         * sure the transaction is fully committed in the cluster. */
+        rd_kafka_destroy(p);
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+        TEST_CALL_ERROR__(rd_kafka_init_transactions(p, -1));
+        rd_kafka_destroy(p);
+
+
+        /* Now query wmarks again */
+        hw_committed = query_hi_wmark(c1, topic, 0);
+        hw_uncommitted = query_hi_wmark(c2, topic, 0);
+
+        TEST_SAY("Post-commit hwmarks: committed %"PRId64
+                 ", uncommitted %"PRId64"\n",
+                 hw_committed, hw_uncommitted);
+
+        TEST_ASSERT(hw_committed == hw_uncommitted,
+                    "Committed hwmark %"PRId64" should be equal to "
+                    "uncommitted hwmark %"PRId64" for %s [0]",
+                    hw_committed, hw_uncommitted, topic);
+
+        rd_kafka_destroy(c1);
+        rd_kafka_destroy(c2);
+
+        SUB_TEST_PASS();
+}
+
+
+
 int main_0103_transactions (int argc, char **argv) {
 
         do_test_misuse_txn();
@@ -775,7 +1170,12 @@ int main_0103_transactions (int argc, char **argv) {
         do_test_consumer_producer_txn();
         do_test_fenced_txn(rd_false /* no produce after fencing */);
         do_test_fenced_txn(rd_true /* produce after fencing */);
-
+        do_test_fatal_idempo_error_without_kip360();
+        do_test_empty_txn(rd_false/*don't send offsets*/, rd_true/*commit*/);
+        do_test_empty_txn(rd_false/*don't send offsets*/, rd_false/*abort*/);
+        do_test_empty_txn(rd_true/*send offsets*/, rd_true/*commit*/);
+        do_test_empty_txn(rd_true/*send offsets*/, rd_false/*abort*/);
+        do_test_wmark_isolation_level();
         return 0;
 }
 
@@ -790,6 +1190,8 @@ static void do_test_txn_local (void) {
         rd_kafka_error_t *error;
         test_timing_t t_init;
         int timeout_ms = 7 * 1000;
+
+        SUB_TEST_QUICK();
 
         /*
          * No transactional.id, init_transactions() should fail.
@@ -842,6 +1244,8 @@ static void do_test_txn_local (void) {
         TIMING_ASSERT(&t_init, timeout_ms - 2000, timeout_ms + 5000);
 
         rd_kafka_destroy(p);
+
+        SUB_TEST_PASS();
 }
 
 

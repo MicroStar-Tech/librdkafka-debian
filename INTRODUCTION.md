@@ -596,9 +596,6 @@ With the benefit of hindsight the librdkafka implementation will attempt
 to provide correctness from the lessons learned in the Java client and
 provide stricter and less complex error handling.
 
-Note: At the time of this writing KIP-360 has not been accepted.
-
-
 The follow sections describe librdkafka's handling of the
 Idempotent Producer specific errors that may be returned by the broker.
 
@@ -1424,8 +1421,6 @@ The legacy `auto.commit.enable` topic configuration property is only to be used
 with the legacy low-level consumer.
 Use `enable.auto.commit` with the modern KafkaConsumer.
 
-There is no support for offset management with ZooKeeper.
-
 
 ##### Auto offset commit
 
@@ -1459,6 +1454,21 @@ The latest stored offset will be automatically committed every
           offset was 10 and the application performs an offsets_store()
           with offset 9, that offset will not be committed.
 
+
+##### Auto offset reset
+
+The consumer will by default try to acquire the last committed offsets for
+each topic+partition it is assigned using its configured `group.id`.
+If there is no committed offset available, or the consumer is unable to
+fetch the committed offsets, the policy of `auto.offset.reset` will kick in.
+This configuration property may be set to one the following values:
+
+ * `earliest` - start consuming the earliest message of the partition.
+ * `latest` - start consuming the next message to be produced to the partition.
+ * `error` - don't start consuming but isntead raise a consumer error
+              with error-code `RD_KAFKA_RESP_ERR__AUTO_OFFSET_RESET` for
+              the topic+partition. This allows the application to decide what
+              to do in case there is no committed start offset.
 
 
 ### Consumer groups
@@ -1855,7 +1865,7 @@ The [Apache Kafka Implementation Proposals (KIPs)](https://cwiki.apache.org/conf
 | KIP-345 - Consumer: Static membership                                    | 2.4.0                       | Supported                                                                                     |
 | KIP-357 - AdminAPI: list ACLs per principal                              | 2.1.0                       | Not supported                                                                                 |
 | KIP-359 - Producer: use EpochLeaderId                                    | 2.4.0                       | Not supported                                                                                 |
-| KIP-360 - Improve handling of unknown Idempotent Producer                | 2.4.0                       | Not supported                                                                                 |
+| KIP-360 - Improve handling of unknown Idempotent Producer                | 2.5.0                       | Supported                                                                                     |
 | KIP-361 - Consumer: add config to disable auto topic creation            | 2.3.0                       | Supported                                                                                     |
 | KIP-368 - SASL period reauth                                             | 2.2.0                       | Not supported                                                                                 |
 | KIP-369 - Always roundRobin partitioner                                  | 2.4.0                       | Not supported                                                                                 |
@@ -1894,6 +1904,7 @@ The [Apache Kafka Implementation Proposals (KIPs)](https://cwiki.apache.org/conf
 | KIP-602 - Use all resolved addresses by default                          | 2.6.0                       | Supported                                                                                     |
 | KIP-651 - Support PEM format for SSL certs and keys                      | 2.7.0                       | Supported                                                                                     |
 | KIP-654 - Aborted txns with non-flushed msgs should not be fatal         | 2.7.0                       | Supported                                                                                     |
+| KIP-735 - Increase default consumer session timeout                      | TBA                         | Supported                                                                                     |
 
 
 
@@ -1925,7 +1936,7 @@ release of librdkafka.
 | 19      | CreateTopics        | 5           | 4                       |
 | 20      | DeleteTopics        | 3           | 1                       |
 | 21      | DeleteRecords       | 2           | 1                       |
-| 22      | InitProducerId      | 1           | 1                       |
+| 22      | InitProducerId      | 4           | 4                       |
 | 24      | AddPartitionsToTxn  | 1           | 0                       |
 | 25      | AddOffsetsToTxn     | 1           | 0                       |
 | 26      | EndTxn              | 1           | 1                       |
