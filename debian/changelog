@@ -1,12 +1,14 @@
-librdkafka (1.8.0-1) UNRELEASED; urgency=medium
+librdkafka (1.8.0-1) unstable; urgency=medium
 
   [ Faidon Liambotis ]
   * Add pristine-tar=True to gbp.conf
 
   [ ChangZhuo Chen (陳昌倬) ]
   * New upstream release.
+  * Bump Standards-Version to 4.6.0.
+  * Update symbol file.
 
- -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Sun, 19 Sep 2021 14:25:25 +0800
+ -- ChangZhuo Chen (陳昌倬) <czchen@debian.org>  Sun, 19 Sep 2021 14:39:58 +0800
 
 librdkafka (1.6.0-1) unstable; urgency=medium
 
