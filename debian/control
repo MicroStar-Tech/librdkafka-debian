@@ -13,7 +13,7 @@ Build-Depends:
  python3,
  rapidjson-dev,
  zlib1g-dev,
-Standards-Version: 4.5.1
+Standards-Version: 4.6.0
 Rules-Requires-Root: no
 Section: libs
 Homepage: https://github.com/edenhill/librdkafka
