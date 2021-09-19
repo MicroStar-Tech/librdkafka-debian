@@ -1708,11 +1708,13 @@ static void do_test_DeleteConsumerGroupOffsets (const char *what,
                                   NULL, 0,
                                   15*1000);
 
+        rd_sleep(1); /* Additional wait time for cluster propagation */
+
         consumer = test_create_consumer(groupid, NULL, NULL, NULL);
 
         if (sub_consumer) {
                 TEST_CALL_ERR__(rd_kafka_subscribe(consumer, subscription));
-                test_consumer_wait_assignment(consumer);
+                test_consumer_wait_assignment(consumer, rd_true);
         }
 
         /* Commit some offsets */

@@ -1,3 +1,296 @@
+# librdkafka v1.8.0
+
+librdkafka v1.8.0 is a security release:
+
+ * Upgrade bundled zlib version from 1.2.8 to 1.2.11 in the `librdkafka.redist`
+   NuGet package. The updated zlib version fixes CVEs:
+   CVE-2016-9840, CVE-2016-9841, CVE-2016-9842, CVE-2016-9843
+   See https://github.com/edenhill/librdkafka/issues/2934 for more information.
+ * librdkafka now uses [vcpkg](https://vcpkg.io/) for up-to-date Windows
+   dependencies in the `librdkafka.redist` NuGet package:
+   OpenSSL 1.1.1l, zlib 1.2.11, zstd 1.5.0.
+ * The upstream dependency (OpenSSL, zstd, zlib) source archive checksums are
+   now verified when building with `./configure --install-deps`.
+   These builds are used by the librdkafka builds bundled with
+   confluent-kafka-go, confluent-kafka-python and confluent-kafka-dotnet.
+
+
+## Enhancements
+
+ * Producer `flush()` now overrides the `linger.ms` setting for the duration
+   of the `flush()` call, effectively triggering immediate transmission of
+   queued messages. (#3489)
+
+## Fixes
+
+### General fixes
+
+ * Correctly detect presence of zlib via compilation check. (Chris Novakovic)
+ * `ERR__ALL_BROKERS_DOWN` is no longer emitted when the coordinator
+   connection goes down, only when all standard named brokers have been tried.
+   This fixes the issue with `ERR__ALL_BROKERS_DOWN` being triggered on
+   `consumer_close()`. It is also now only emitted if the connection was fully
+   up (past handshake), and not just connected.
+ * `rd_kafka_query_watermark_offsets()`, `rd_kafka_offsets_for_times()`,
+   `consumer_lag` metric, and `auto.offset.reset` now honour
+   `isolation.level` and will return the Last Stable Offset (LSO)
+   when `isolation.level` is set to `read_committed` (default), rather than
+   the uncommitted high-watermark when it is set to `read_uncommitted`. (#3423)
+ * SASL GSSAPI is now usable when `sasl.kerberos.min.time.before.relogin`
+   is set to 0 - which disables ticket refreshes (by @mpekalski, #3431).
+ * Rename internal crc32c() symbol to rd_crc32c() to avoid conflict with
+   other static libraries (#3421).
+ * `txidle` and `rxidle` in the statistics object was emitted as 18446744073709551615 when no idle was known. -1 is now emitted instead. (#3519)
+
+
+### Consumer fixes
+
+ * Automatically retry offset commits on `ERR_REQUEST_TIMED_OUT`,
+   `ERR_COORDINATOR_NOT_AVAILABLE`, and `ERR_NOT_COORDINATOR` (#3398).
+   Offset commits will be retried twice.
+ * Timed auto commits did not work when only using assign() and not subscribe().
+   This regression was introduced in v1.7.0.
+ * If the topics matching the current subscription changed (or the application
+   updated the subscription) while there was an outstanding JoinGroup or
+   SyncGroup request, an additional request would sometimes be sent before
+   handling the response of the first. This in turn lead to internal state
+   issues that could cause a crash or malbehaviour.
+   The consumer will now wait for any outstanding JoinGroup or SyncGroup
+   responses before re-joining the group.
+ * `auto.offset.reset` could previously be triggered by temporary errors,
+   such as disconnects and timeouts (after the two retries are exhausted).
+   This is now fixed so that the auto offset reset policy is only triggered
+   for permanent errors.
+ * The error that triggers `auto.offset.reset` is now logged to help the
+   application owner identify the reason of the reset.
+ * If a rebalance takes longer than a consumer's `session.timeout.ms`, the
+   consumer will remain in the group as long as it receives heartbeat responses
+   from the broker.
+
+
+### Admin fixes
+
+ * `DeleteRecords()` could crash if one of the underlying requests
+   (for a given partition leader) failed at the transport level (e.g., timeout).
+   (#3476).
+
+
+
+# librdkafka v1.7.0
+
+librdkafka v1.7.0 is feature release:
+
+ * [KIP-360](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=89068820) - Improve reliability of transactional producer.
+   Requires Apache Kafka 2.5 or later.
+ * OpenSSL Engine support (`ssl.engine.location`) by @adinigam and @ajbarb.
+
+
+## Enhancements
+
+ * Added `connections.max.idle.ms` to automatically close idle broker
+   connections.
+   This feature is disabled by default unless `bootstrap.servers` contains
+   the string `azure` in which case the default is set to <4 minutes to improve
+   connection reliability and circumvent limitations with the Azure load
+   balancers (see #3109 for more information).
+ * Bumped to OpenSSL 1.1.1k in binary librdkafka artifacts.
+ * The binary librdkafka artifacts for Alpine are now using Alpine 3.12.
+   OpenSSL 1.1.1k.
+ * Improved static librdkafka Windows builds using MinGW (@neptoess, #3130).
+ * The `librdkafka.redist` NuGet package now has updated zlib, zstd and
+   OpenSSL versions (from vcpkg).
+
+
+## Security considerations
+
+ * The zlib version bundled with the `librdkafka.redist` NuGet package has now been upgraded
+   from zlib 1.2.8 to 1.2.11, fixing the following CVEs:
+   * CVE-2016-9840: undefined behaviour (compiler dependent) in inflate (decompression) code: this is used by the librdkafka consumer. Risk of successfully exploitation through consumed messages is eastimated very low.
+   * CVE-2016-9841: undefined behaviour (compiler dependent) in inflate code: this is used by the librdkafka consumer. Risk of successfully exploitation through consumed messages is eastimated very low.
+   * CVE-2016-9842: undefined behaviour in inflateMark(): this API is not used by librdkafka.
+   * CVE-2016-9843: issue in crc32_big() which is called from crc32_z(): this API is not used by librdkafka.
+
+## Upgrade considerations
+
+ * The C++ `oauthbearer_token_refresh_cb()` was missing a `Handle *`
+   argument that has now been added. This is a breaking change but the original
+   function signature is considered a bug.
+   This change only affects C++ OAuth developers.
+ * [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) The consumer `session.timeout.ms`
+   default was changed from 10 to 45 seconds to make consumer groups more
+   robust and less sensitive to temporary network and cluster issues.
+ * Statistics: `consumer_lag` is now using the `committed_offset`,
+   while the new `consumer_lag_stored` is using `stored_offset`
+   (offset to be committed).
+   This is more correct than the previous `consumer_lag` which was using
+   either `committed_offset` or `app_offset` (last message passed
+   to application).
+ * The `librdkafka.redist` NuGet package is now built with MSVC runtime v140
+   (VS 2015). Previous versions were built with MSVC runtime v120 (VS 2013).
+
+
+## Fixes
+
+### General fixes
+
+ * Fix accesses to freed metadata cache mutexes on client termination (#3279)
+ * There was a race condition on receiving updated metadata where a broker id
+   update (such as bootstrap to proper broker transformation) could finish after
+   the topic metadata cache was updated, leading to existing brokers seemingly
+   being not available.
+   One occurrence of this issue was query_watermark_offsets() that could return
+   `ERR__UNKNOWN_PARTITION` for existing partitions shortly after the
+   client instance was created.
+ * The OpenSSL context is now initialized with `TLS_client_method()`
+   (on OpenSSL >= 1.1.0) instead of the deprecated and outdated
+   `SSLv23_client_method()`.
+ * The initial cluster connection on client instance creation could sometimes
+   be delayed up to 1 second if a `group.id` or `transactional.id`
+   was configured (#3305).
+ * Speed up triggering of new broker connections in certain cases by exiting
+   the broker thread io/op poll loop when a wakeup op is received.
+ * SASL GSSAPI: The Kerberos kinit refresh command was triggered from
+   `rd_kafka_new()` which made this call blocking if the refresh command
+   was taking long. The refresh is now performed by the background rdkafka
+   main thread.
+ * Fix busy-loop (100% CPU on the broker threads) during the handshake phase
+   of an SSL connection.
+ * Disconnects during SSL handshake are now propagated as transport errors
+   rather than SSL errors, since these disconnects are at the transport level
+   (e.g., incorrect listener, flaky load balancer, etc) and not due to SSL
+   issues.
+ * Increment metadata fast refresh interval backoff exponentially (@ajbarb, #3237).
+ * Unthrottled requests are no longer counted in the `brokers[].throttle`
+   statistics object.
+ * Log CONFWARN warning when global topic configuration properties
+   are overwritten by explicitly setting a `default_topic_conf`.
+
+### Consumer fixes
+
+ * If a rebalance happened during a `consume_batch..()` call the already
+   accumulated messages for revoked partitions were not purged, which would
+   pass messages to the application for partitions that were no longer owned
+   by the consumer. Fixed by @jliunyu. #3340.
+ * Fix balancing and reassignment issues with the cooperative-sticky assignor.
+   #3306.
+ * Fix incorrect detection of first rebalance in sticky assignor (@hallfox).
+ * Aborted transactions with no messages produced to a partition could
+   cause further successfully committed messages in the same Fetch response to
+   be ignored, resulting in consumer-side message loss.
+   A log message along the lines `Abort txn ctrl msg bad order at offset
+   7501: expected before or at 7702: messages in aborted transactions may be delivered to the application`
+   would be seen.
+   This is a rare occurrence where a transactional producer would register with
+   the partition but not produce any messages before aborting the transaction.
+ * The consumer group deemed cached metadata up to date by checking
+   `topic.metadata.refresh.interval.ms`: if this property was set too low
+   it would cause cached metadata to be unusable and new metadata to be fetched,
+   which could delay the time it took for a rebalance to settle.
+   It now correctly uses `metadata.max.age.ms` instead.
+ * The consumer group timed auto commit would attempt commits during rebalances,
+   which could result in "Illegal generation" errors. This is now fixed, the
+   timed auto committer is only employed in the steady state when no rebalances
+   are taking places. Offsets are still auto committed when partitions are
+   revoked.
+ * Retriable FindCoordinatorRequest errors are no longer propagated to
+   the application as they are retried automatically.
+ * Fix rare crash (assert `rktp_started`) on consumer termination
+   (introduced in v1.6.0).
+ * Fix unaligned access and possibly corrupted snappy decompression when
+   building with MSVC (@azat)
+ * A consumer configured with the `cooperative-sticky` assignor did
+   not actively Leave the group on unsubscribe(). This delayed the
+   rebalance for the remaining group members by up to `session.timeout.ms`.
+ * The current subscription list was sometimes leaked when unsubscribing.
+
+### Producer fixes
+
+ * The timeout value of `flush()` was not respected when delivery reports
+   were scheduled as events (such as for confluent-kafka-go) rather than
+   callbacks.
+ * There was a race conditition in `purge()` which could cause newly
+   created partition objects, or partitions that were changing leaders, to
+   not have their message queues purged. This could cause
+   `abort_transaction()` to time out. This issue is now fixed.
+ * In certain high-thruput produce rate patterns producing could stall for
+   1 second, regardless of `linger.ms`, due to rate-limiting of internal
+   queue wakeups. This is now fixed by not rate-limiting queue wakeups but
+   instead limiting them to one wakeup per queue reader poll. #2912.
+
+### Transactional Producer fixes
+
+ * KIP-360: Fatal Idempotent producer errors are now recoverable by the
+   transactional producer and will raise a `txn_requires_abort()` error.
+ * If the cluster went down between `produce()` and `commit_transaction()`
+   and before any partitions had been registered with the coordinator, the
+   messages would time out but the commit would succeed because nothing
+   had been sent to the coordinator. This is now fixed.
+ * If the current transaction failed while `commit_transaction()` was
+   checking the current transaction state an invalid state transaction could
+   occur which in turn would trigger a assertion crash.
+   This issue showed up as "Invalid txn state transition: .." crashes, and is
+   now fixed by properly synchronizing both checking and transition of state.
+
+
+
+# librdkafka v1.6.1
+
+librdkafka v1.6.1 is a maintenance release.
+
+## Upgrade considerations
+
+ * Fatal idempotent producer errors are now also fatal to the transactional
+   producer. This is a necessary step to maintain data integrity prior to
+   librdkafka supporting KIP-360. Applications should check any transactional
+   API errors for the is_fatal flag and decommission the transactional producer
+   if the flag is set.
+ * The consumer error raised by `auto.offset.reset=error` now has error-code
+   set to `ERR__AUTO_OFFSET_RESET` to allow an application to differentiate
+   between auto offset resets and other consumer errors.
+
+
+## Fixes
+
+### General fixes
+
+ * Admin API and transactional `send_offsets_to_transaction()` coordinator
+   requests, such as TxnOffsetCommitRequest, could in rare cases be sent
+   multiple times which could cause a crash.
+ * `ssl.ca.location=probe` is now enabled by default on Mac OSX since the
+   librdkafka-bundled OpenSSL might not have the same default CA search paths
+   as the system or brew installed OpenSSL. Probing scans all known locations.
+
+### Transactional Producer fixes
+
+ * Fatal idempotent producer errors are now also fatal to the transactional
+   producer.
+ * The transactional producer could crash if the transaction failed while
+   `send_offsets_to_transaction()` was called.
+ * Group coordinator requests for transactional
+   `send_offsets_to_transaction()` calls would leak memory if the
+   underlying request was attempted to be sent after the transaction had
+   failed.
+ * When gradually producing to multiple partitions (resulting in multiple
+   underlying AddPartitionsToTxnRequests) subsequent partitions could get
+   stuck in pending state under certain conditions. These pending partitions
+   would not send queued messages to the broker and eventually trigger
+   message timeouts, failing the current transaction. This is now fixed.
+ * Committing an empty transaction (no messages were produced and no
+   offsets were sent) would previously raise a fatal error due to invalid state
+   on the transaction coordinator. We now allow empty/no-op transactions to
+   be committed.
+
+### Consumer fixes
+
+ * The consumer will now retry indefinitely (or until the assignment is changed)
+   to retrieve committed offsets. This fixes the issue where only two retries
+   were attempted when outstanding transactions were blocking OffsetFetch
+   requests with `ERR_UNSTABLE_OFFSET_COMMIT`. #3265
+
+
+
+
+
 # librdkafka v1.6.0
 
 librdkafka v1.6.0 is feature release:

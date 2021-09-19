@@ -69,6 +69,11 @@ typedef struct rd_kafka_replyq_s {
 #define RD_KAFKA_OP_F_SENT        0x20 /* rkbuf: request sent on wire */
 #define RD_KAFKA_OP_F_FLEXVER     0x40 /* rkbuf: flexible protocol version
                                         *        (KIP-482) */
+#define RD_KAFKA_OP_F_NEED_MAKE   0x80 /* rkbuf: request content has not
+                                        *        been made yet, the make
+                                        *        callback will be triggered
+                                        *        to construct the request
+                                        *        right before it is sent. */
 
 typedef enum {
         RD_KAFKA_OP_NONE,     /* No specific type, use OP_CB */
@@ -136,6 +141,7 @@ typedef enum {
         RD_KAFKA_OP_TXN,             /**< Transaction command */
         RD_KAFKA_OP_GET_REBALANCE_PROTOCOL, /**< Get rebalance protocol */
         RD_KAFKA_OP_LEADERS,         /**< Partition leader query */
+        RD_KAFKA_OP_BARRIER,         /**< Version barrier bump */
         RD_KAFKA_OP__END
 } rd_kafka_op_type_t;
 
@@ -474,6 +480,12 @@ struct rd_kafka_op_s {
                         rd_kafka_op_type_t reqtype; /**< Request op type,
                                                      *   used for logging. */
 
+                        rd_list_t args; /**< Args moved from the request op
+                                         *   when the result op is created.
+                                         *
+                                         *   Type depends on request.
+                                         */
+
                         char *errstr;      /**< Error string, if rko_err
                                             *   is set, else NULL. */
 
@@ -711,5 +723,15 @@ void rd_kafka_op_offset_store (rd_kafka_t *rk, rd_kafka_op_t *rko);
         ((rko)->rko_type == RD_KAFKA_OP_FETCH &&                        \
          !(rko)->rko_err &&                                             \
          ((rko)->rko_u.fetch.rkm.rkm_flags & RD_KAFKA_MSG_F_CONTROL))
+
+
+
+/**
+ * @returns true if the rko's replyq is valid and the
+ *          rko's rktp version (if any) is not outdated.
+ */
+#define rd_kafka_op_replyq_is_valid(RKO)                        \
+        (rd_kafka_replyq_is_valid(&(RKO)->rko_replyq) &&        \
+         !rd_kafka_op_version_outdated((RKO), 0))
 
 #endif /* _RDKAFKA_OP_H_ */

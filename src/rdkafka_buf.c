@@ -29,6 +29,7 @@
 #include "rdkafka_int.h"
 #include "rdkafka_buf.h"
 #include "rdkafka_broker.h"
+#include "rdkafka_interceptor.h"
 
 void rd_kafka_buf_destroy_final (rd_kafka_buf_t *rkbuf) {
 
@@ -59,6 +60,9 @@ void rd_kafka_buf_destroy_final (rd_kafka_buf_t *rkbuf) {
 
         if (rkbuf->rkbuf_response)
                 rd_kafka_buf_destroy(rkbuf->rkbuf_response);
+
+        if (rkbuf->rkbuf_make_opaque && rkbuf->rkbuf_free_make_opaque_cb)
+                rkbuf->rkbuf_free_make_opaque_cb(rkbuf->rkbuf_make_opaque);
 
         rd_kafka_replyq_destroy(&rkbuf->rkbuf_replyq);
         rd_kafka_replyq_destroy(&rkbuf->rkbuf_orig_replyq);
@@ -450,6 +454,17 @@ void rd_kafka_buf_callback (rd_kafka_t *rk,
 			    rd_kafka_broker_t *rkb, rd_kafka_resp_err_t err,
                             rd_kafka_buf_t *response, rd_kafka_buf_t *request){
 
+        rd_kafka_interceptors_on_response_received(
+                rk,
+                -1,
+                rkb ? rd_kafka_broker_name(rkb) : "",
+                rkb ? rd_kafka_broker_id(rkb) : -1,
+                request->rkbuf_reqhdr.ApiKey,
+                request->rkbuf_reqhdr.ApiVersion,
+                request->rkbuf_reshdr.CorrId,
+                response ? response->rkbuf_totlen : 0,
+                response ? response->rkbuf_ts_sent : -1,
+                err);
 
         if (err != RD_KAFKA_RESP_ERR__DESTROY && request->rkbuf_replyq.q) {
                 rd_kafka_op_t *rko = rd_kafka_op_new(RD_KAFKA_OP_RECV_BUF);
@@ -486,3 +501,26 @@ void rd_kafka_buf_callback (rd_kafka_t *rk,
 }
 
 
+
+/**
+ * @brief Set the maker callback, which will be called just prior to sending
+ *        to construct the buffer contents.
+ *
+ * Use this when the usable ApiVersion must be known but the broker may
+ * currently be down.
+ *
+ * See rd_kafka_make_req_cb_t documentation for more info.
+ */
+void rd_kafka_buf_set_maker (rd_kafka_buf_t *rkbuf,
+                             rd_kafka_make_req_cb_t *make_cb,
+                             void *make_opaque,
+                             void (*free_make_opaque_cb) (void *make_opaque)) {
+        rd_assert(!rkbuf->rkbuf_make_req_cb &&
+                  !(rkbuf->rkbuf_flags & RD_KAFKA_OP_F_NEED_MAKE));
+
+        rkbuf->rkbuf_make_req_cb = make_cb;
+        rkbuf->rkbuf_make_opaque = make_opaque;
+        rkbuf->rkbuf_free_make_opaque_cb = free_make_opaque_cb;
+
+        rkbuf->rkbuf_flags |= RD_KAFKA_OP_F_NEED_MAKE;
+}
