@@ -65,10 +65,15 @@ set(
     tinycthread.c
     tinycthread_extra.c
     rdxxhash.c
+    cJSON.c
 )
 
 if(WITH_SSL)
   list(APPEND sources rdkafka_ssl.c)
+endif()
+
+if(WITH_CURL)
+ list(APPEND sources rdhttp.c)
 endif()
 
 if(WITH_HDRHISTOGRAM)
@@ -95,6 +100,10 @@ endif()
 
 if(WITH_SASL_OAUTHBEARER)
   list(APPEND sources rdkafka_sasl_oauthbearer.c)
+endif()
+
+if(WITH_OAUTHBEARER_OIDC)
+  list(APPEND sources rdkafka_sasl_oauthbearer_oidc.c)
 endif()
 
 if(WITH_ZLIB)
