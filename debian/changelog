@@ -1,3 +1,23 @@
+librdkafka (1.9.2-1) unstable; urgency=medium
+
+  * New upstream release.
+    - Update librdkafka1.symbols to add new (as of v1.9.0) symbols.
+  * Upstream build system now generates an librdkafka-static.a that is
+    identical to librdkafka.a. Add it to debian/no-installed.
+  * Remove override_dh_auto_configure and the handcrafted ./configure; mklove
+    now supports runstatedir, and therefore the automatic configure line
+    works.
+  * Add a patch (makefile-bashism-pr4147) to fix a bashism in the main
+    Makefile, which resulted into the build tree becoming dirty.
+  * Multiple debian/copyright updates:
+    - Add entries for files that were undocumented before, and files
+      introduced in this newer upstream release.
+    - Update copyright years.
+    - Remove license MIT, as a duplicate of Expat, already in the file.
+  * Bump Standards-Version to 4.6.2, no changes needed.
+
+ -- Faidon Liambotis <paravoid@debian.org>  Thu, 12 Jan 2023 04:13:14 +0200
+
 librdkafka (1.8.0-1) unstable; urgency=medium
 
   [ Faidon Liambotis ]
